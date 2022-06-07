@@ -345,8 +345,8 @@ class TaskAwareRearrangeDataCollectionExperimentConfig(OnePhaseTaskAwareRearrang
         stage: str,
         process_ind: int,
         total_processes: int,
-        allowed_scenes: Sequence[str] = ['FloorPlan1', 'FloorPlan2', 'FloorPlan3', 'FloorPlan4'],
-        allowed_rearrange_inds_subset: Optional[Sequence[int]] = [0, 1, 2, 3, 4],
+        allowed_scenes: Sequence[str] = None,
+        allowed_rearrange_inds_subset: Optional[Sequence[int]] = None,
         devices: Optional[List[int]] = None,
         seeds: Optional[List[int]] = None,
         deterministic_cudnn: bool = False,
@@ -381,7 +381,7 @@ class TaskAwareRearrangeDataCollectionExperimentConfig(OnePhaseTaskAwareRearrang
         #     sorted(partition_sequence(seq=scenes, parts=total_processes,)[process_ind])
         # )
         if allowed_rearrange_inds_subset is not None:
-            allowed_rearrange_inds_subset = tuple(allowed_rearrange_inds_subset)
+            allowed_rearrange_inds_subset = list(allowed_rearrange_inds_subset)
             scene_to_allowed_rearrange_inds = {
                 scene: allowed_rearrange_inds_subset for scene in allowed_scenes
             }
@@ -392,10 +392,11 @@ class TaskAwareRearrangeDataCollectionExperimentConfig(OnePhaseTaskAwareRearrang
         if data_dir is not None:
             listdir = os.listdir(data_dir)
             for dirname in listdir:
-                scene_ = dirname.split("__")[0]
-                idx = int(dirname.split("__")[-1])
-                if scene_ in allowed_scenes:
-                    scene_to_allowed_rearrange_inds[scene_].remove(idx)
+                if os.path.isdir(dirname):
+                    scene_ = dirname.split("__")[0]
+                    idx = int(dirname.split("__")[-1])
+                    if scene_ in allowed_scenes and idx in allowed_rearrange_inds_subset:
+                        scene_to_allowed_rearrange_inds[scene_].remove(idx)
         
         scene_to_allowed_rearrange_inds = {
             k: tuple(v)

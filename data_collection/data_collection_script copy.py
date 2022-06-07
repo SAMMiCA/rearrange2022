@@ -216,10 +216,10 @@ class DataCollectionAgent:
         self.first_local_worker_id = first_local_worker_id
 
         self.rollout_storage: RolloutStorage = Builder(RolloutBlockStorage)()
-        self.annotations = []
-        self.images = []
-        self.image_id = 0
-        self.coco_id = 0
+        self.annotations = [[] for _ in range(self.num_samplers)]
+        self.images = [[] for _ in range(self.num_samplers)]
+        self.image_id = [0 for _ in range(self.num_samplers)]
+        self.coco_id = [0 for _ in range(self.num_samplers)]
         self.remaining_tasks = []
         self.expert_subtask_history = [[] for _ in range(self.num_samplers)]
         self.expert_action_history = [[] for _ in range(self.num_samplers)]
@@ -381,6 +381,18 @@ class DataCollectionAgent:
     def select_action_history(self, keep: List[int]):
         self.action_history = [self.action_history[i] for i in keep]
 
+    def select_images(self, keep: List[int]):
+        self.images = [self.images[i] for i in keep]
+
+    def select_annotations(self, keep: List[int]):
+        self.annotations = [self.annotations[i] for i in keep]
+
+    def select_image_id(self, keep: List[int]):
+        self.image_id = [self.image_id[i] for i in keep]
+
+    def select_coco_id(self, keep: List[int]):
+        self.coco_id = [self.coco_id[i] for i in keep]
+
     def get_tasks_num_steps_taken(self, num_samplers: int):
         return self.vector_tasks.call(['num_steps_taken'] * num_samplers)
 
@@ -436,6 +448,29 @@ class DataCollectionAgent:
         rewards = torch.tensor(
             rewards, dtype=torch.float, device=self.device,  # type:ignore
         )
+        for sampler_id in range(flat_actions.shape[1]):
+            if dones[sampler_id]:
+                sampler_dir = os.path.join(self.data_dir, unique_ids[sampler_id])
+                self.save_json_data(
+                    data=dict(
+                        images=self.images[sampler_id],
+                        annotations=self.annotations[sampler_id],
+                        categories=[
+                            {
+                                'id': it + 1,
+                                'name': name,
+                            }
+                            for it, name in enumerate(self.config.ORDERED_OBJECT_TYPES)
+                        ],
+                    ),
+                    dirpath=sampler_dir,
+                    filename="annotations.json",
+                )
+                self.images[sampler_id] = []
+                self.annotations[sampler_id] = []
+                self.coco_id[sampler_id] = 0
+                self.image_id[sampler_id] = 0
+                
 
         # We want rewards to have dimensions [sampler, reward]
         if len(rewards.shape) == 1:
@@ -498,6 +533,10 @@ class DataCollectionAgent:
         self.select_expert_subtask_history(keep)
         self.select_expert_action_history(keep)
         self.select_action_history(keep)
+        self.select_images(keep)
+        self.select_annotations(keep)
+        self.select_image_id(keep)
+        self.select_coco_id(keep)
         self.dones = dones
 
         return npaused
@@ -631,31 +670,31 @@ class DataCollectionAgent:
                     area = width * height
                     # update annotation for annotations
                     data_anno = dict(
-                        image_id=self.image_id,
-                        id=self.coco_id,
+                        image_id=self.image_id[sampler_id],
+                        id=self.coco_id[sampler_id],
                         category_id=object_id+1,
                         bbox=bbox,
                         area=area,
                         segmentation=poly,
                         iscrowd=0,
                     )
-                    self.annotations.append(data_anno)
-                    self.coco_id += 1
+                    self.annotations[sampler_id].append(data_anno)
+                    self.coco_id[sampler_id] += 1
                     add_image = True
             
             if add_image:
-                self.images.append(
+                self.images[sampler_id].append(
                     dict(
-                        id=self.image_id,
+                        id=self.image_id[sampler_id],
                         file_name=os.path.relpath(
                             os.path.relpath(os.path.join(sampler_dir, "rgb", f"{filename}.png")),
-                            os.path.relpath(self.data_dir)
+                            os.path.relpath(sampler_dir)
                         ),
                         height=self.config.SCREEN_SIZE,
                         width=self.config.SCREEN_SIZE,
                     )
                 )
-                self.image_id += 1
+                self.image_id[sampler_id] += 1
 
     @staticmethod
     def save_image_data(
@@ -725,14 +764,6 @@ class DataCollectionAgent:
     ):
         data_collection_completed = False
         try:
-            from pycocotools.coco import COCO
-            if os.path.exists(os.path.join(self.data_dir, "annotations.json")):
-                coco = COCO(os.path.join(self.data_dir, "annotations.json"))
-                self.image_id += len(coco.dataset["images"])
-                self.coco_id += len(coco.dataset["annotations"])
-                self.images.extend(coco.dataset["images"])
-                self.annotations.extend(coco.dataset["annotations"])
-
             self.data_collection()
             data_collection_completed = True
         except KeyboardInterrupt:
@@ -745,22 +776,44 @@ class DataCollectionAgent:
             )
             get_logger().exception(traceback.format_exc())
         finally:
-            self.save_json_data(
-                data=dict(
-                    images=self.images,
-                    annotations=self.annotations,
-                    categories=[
-                        {
-                            'id': it + 1,
-                            'name': name,
-                        }
-                        for it, name in enumerate(self.config.ORDERED_OBJECT_TYPES)
-                    ],
-                ),
-                dirpath=self.data_dir,
-                filename="annotations.json",
-            )
             if data_collection_completed:
+                annos = []
+                images = []
+                image_id = 0
+                coco_id = 0
+
+                for dir in os.listdir(self.data_dir):
+                    from pycocotools.coco import COCO
+                    coco = COCO(os.path.join(self.data_dir, dir, 'annotations.json'))
+                    for image in coco.dataset['images']:
+                        image['id'] += image_id
+                        image['file_name'] = os.path.join(dir, image['file_name'])
+                    images.extend(coco.dataset['images'])
+
+                    for anno in coco.dataset['annotations']:
+                        anno['image_id'] += image_id
+                        anno['id'] += coco_id
+                    annos.extend(coco.dataset['annotations'])
+
+                    image_id += len(coco.dataset['images'])
+                    coco_id += len(coco.dataset['annotations'])
+
+                self.save_json_data(
+                    data=dict(
+                        images=images,
+                        annotations=annos,
+                        categories=[
+                            {
+                                'id': it + 1,
+                                'name': name,
+                            }
+                            for it, name in enumerate(self.config.ORDERED_OBJECT_TYPES)
+                        ],
+                    ),
+                    dirpath=self.data_dir,
+                    filename="annotations.json",
+                )
+
                 if self.worker_id == 0:
                     self.results_queue.put(("train_stopped", 0))
                 get_logger().info(
