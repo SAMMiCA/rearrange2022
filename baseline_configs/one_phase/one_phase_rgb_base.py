@@ -23,17 +23,19 @@ from rearrange.tasks import RearrangeTaskSampler
 class OnePhaseRGBBaseExperimentConfig(RearrangeBaseExperimentConfig, ABC):
     @classmethod
     def sensors(cls) -> Sequence[Sensor]:
-        cnn_type, pretraining_type = cls.CNN_PREPROCESSOR_TYPE_AND_PRETRAINING
-        if pretraining_type.strip().lower() == "clip":
-            from allenact_plugins.clip_plugin.clip_preprocessors import (
-                ClipResNetPreprocessor,
-            )
+        mean, stdev = None, None
+        if cls.CNN_PREPROCESSOR_TYPE_AND_PRETRAINING is not None:
+            cnn_type, pretraining_type = cls.CNN_PREPROCESSOR_TYPE_AND_PRETRAINING
+            if pretraining_type.strip().lower() == "clip":
+                from allenact_plugins.clip_plugin.clip_preprocessors import (
+                    ClipResNetPreprocessor,
+                )
 
-            mean = ClipResNetPreprocessor.CLIP_RGB_MEANS
-            stdev = ClipResNetPreprocessor.CLIP_RGB_STDS
-        else:
-            mean = IMAGENET_RGB_MEANS
-            stdev = IMAGENET_RGB_STDS
+                mean = ClipResNetPreprocessor.CLIP_RGB_MEANS
+                stdev = ClipResNetPreprocessor.CLIP_RGB_STDS
+            else:
+                mean = IMAGENET_RGB_MEANS
+                stdev = IMAGENET_RGB_STDS
 
         return [
             RGBRearrangeSensor(

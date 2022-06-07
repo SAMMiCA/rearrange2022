@@ -515,6 +515,7 @@ class ObjectInteractablePostionsCache:
                         rotation=cur_rot,
                         **cur_pos,
                         forceAction=True,
+                        forceKinematic=True,
                     )
                     assert event.metadata["lastActionSuccess"]
 

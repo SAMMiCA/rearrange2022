@@ -675,10 +675,11 @@ class RearrangeTaskSpecIterable:
         self.scenes_to_task_spec_dicts = {
             k: [*v] for k, v in scenes_to_task_spec_dicts.items()
         }
-        assert len(self.scenes_to_task_spec_dicts) != 0 and all(
-            len(self.scenes_to_task_spec_dicts[scene]) != 0
-            for scene in self.scenes_to_task_spec_dicts
-        )
+        # assert len(self.scenes_to_task_spec_dicts) != 0 and all(
+        #     len(self.scenes_to_task_spec_dicts[scene]) != 0
+        #     for scene in self.scenes_to_task_spec_dicts
+        # )
+        assert len(self.scenes_to_task_spec_dicts) != 0
         self._seed = seed
         self.random = random.Random(self.seed)
         self.start_epochs = epochs

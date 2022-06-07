@@ -41,4 +41,8 @@ dependencies:
     - pyquaternion==0.9.9
     - compress_pickle==1.2.0
     - lru-dict
+    - scikit-image
+    - pycocotools
+    - kornia
+    - transforms3d
 prefix: /anaconda3/envs/thor-rearrange

@@ -259,7 +259,10 @@ class RearrangeBaseExperimentConfig(ExperimentConfig):
             scenes = datagen_utils.get_scenes(stage)
 
         if total_processes > len(scenes):
-            assert stage == "train" and total_processes % len(scenes) == 0
+            assert stage == "train" and total_processes % len(scenes) == 0, (
+                f"stage {stage} should be equal to 'train' and total_processes {total_processes} should be multiple of "
+                f"len(scenes) {len(scenes)}: total_processes % len(scenes) = {total_processes % len(scenes)}"
+            )
             scenes = scenes * (total_processes // len(scenes))
 
         allowed_scenes = list(
@@ -278,33 +281,38 @@ class RearrangeBaseExperimentConfig(ExperimentConfig):
         device = (
             devices[process_ind % len(devices)]
             if devices is not None and len(devices) > 0
-            else torch.device("cpu")
+            # else torch.device("cpu")
+            else None
         )
         x_display: Optional[str] = None
         gpu_device: Optional[int] = None
         thor_platform: Optional[ai2thor.platform.BaseLinuxPlatform] = None
-        if platform.system() == "Linux":
-            try:
-                x_displays = get_open_x_displays(throw_error_if_empty=True)
+        # if platform.system() == "Linux":
+        #     try:
+        #         x_displays = get_open_x_displays(throw_error_if_empty=True)
 
-                if devices is not None and len(
-                    [d for d in devices if d != torch.device("cpu")]
-                ) > len(x_displays):
-                    get_logger().warning(
-                        f"More GPU devices found than X-displays (devices: `{x_displays}`, x_displays: `{x_displays}`)."
-                        f" This is not necessarily a bad thing but may mean that you're not using GPU memory as"
-                        f" efficiently as possible. Consider following the instructions here:"
-                        f" https://allenact.org/installation/installation-framework/#installation-of-ithor-ithor-plugin"
-                        f" describing how to start an X-display on every GPU."
-                    )
-                x_display = x_displays[process_ind % len(x_displays)]
-            except IOError:
-                # Could not find an open `x_display`, use CloudRendering instead.
-                assert all(
-                    [d != torch.device("cpu") and d >= 0 for d in devices]
-                ), "Cannot use CPU devices when there are no open x-displays as CloudRendering requires specifying a GPU."
-                gpu_device = device
-                thor_platform = ai2thor.platform.CloudRendering
+        #         if devices is not None and len(
+        #             [d for d in devices if d != torch.device("cpu")]
+        #         ) > len(x_displays):
+        #             get_logger().warning(
+        #                 f"More GPU devices found than X-displays (devices: `{x_displays}`, x_displays: `{x_displays}`)."
+        #                 f" This is not necessarily a bad thing but may mean that you're not using GPU memory as"
+        #                 f" efficiently as possible. Consider following the instructions here:"
+        #                 f" https://allenact.org/installation/installation-framework/#installation-of-ithor-ithor-plugin"
+        #                 f" describing how to start an X-display on every GPU."
+        #             )
+        #         x_display = x_displays[process_ind % len(x_displays)]
+        #     except IOError:
+        #         # Could not find an open `x_display`, use CloudRendering instead.
+        #         assert all(
+        #             [d != torch.device("cpu") and d >= 0 for d in devices]
+        #         ), "Cannot use CPU devices when there are no open x-displays as CloudRendering requires specifying a GPU."
+        #         gpu_device = device
+        #         thor_platform = ai2thor.platform.CloudRendering
+        
+        gpu_device = device
+        if cls.HEADLESS:
+            thor_platform = ai2thor.platform.CloudRendering
 
         kwargs = {
             "stage": stage,
