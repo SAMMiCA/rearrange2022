@@ -1114,14 +1114,12 @@ class DataCollectionRunner:
 
         distributed_port = 0 if num_workers == 1 else self.get_port()
         worker_ids = self.local_worker_ids(self.mode)
-        get_logger().info(
-            f'worker_ids: {worker_ids}'
-        )
         worker_fn = self.data_collection_loop
         
         for worker_id in worker_ids:
             worker_kwargs = dict(
                 id=worker_id,
+                mode=self.mode,
                 config=self.config,
                 data_dir=os.path.join(
                     self.output_dir, self.mode
