@@ -1,3 +1,4 @@
+from multiprocessing import get_logger
 from typing import Tuple, Sequence, Optional, Dict, Any, List
 import os
 import gym
@@ -380,6 +381,7 @@ class TaskAwareRearrangeDataCollectionExperimentConfig(OnePhaseTaskAwareRearrang
         # allowed_scenes = list(
         #     sorted(partition_sequence(seq=scenes, parts=total_processes,)[process_ind])
         # )
+        scene_to_allowed_rearrange_inds = None
         if allowed_rearrange_inds_subset is not None:
             allowed_rearrange_inds_subset = list(allowed_rearrange_inds_subset)
             scene_to_allowed_rearrange_inds = {
@@ -387,17 +389,20 @@ class TaskAwareRearrangeDataCollectionExperimentConfig(OnePhaseTaskAwareRearrang
             }
         else:
             scene_to_allowed_rearrange_inds = {
-                scene: list(range(0, 50)) for scene in scenes
+                scene: tuple(range(0, 50)) for scene in scenes
             }
+
         if data_dir is not None:
             listdir = os.listdir(data_dir)
             for dirname in listdir:
-                if os.path.isdir(dirname):
+                if os.path.isdir(os.path.join(data_dir, dirname)):
                     scene_ = dirname.split("__")[0]
                     idx = int(dirname.split("__")[-1])
-                    if scene_ in allowed_scenes and idx in allowed_rearrange_inds_subset:
-                        scene_to_allowed_rearrange_inds[scene_].remove(idx)
-        
+                    if scene_ in allowed_scenes and idx in scene_to_allowed_rearrange_inds[scene_]:
+                        # scene_to_allowed_rearrange_inds[scene_].remove(idx)
+                        l = list(scene_to_allowed_rearrange_inds[scene_])
+                        l.remove(idx)
+                        scene_to_allowed_rearrange_inds[scene_] = tuple(l)
         scene_to_allowed_rearrange_inds = {
             k: tuple(v)
             for k, v in scene_to_allowed_rearrange_inds.items() if v
