@@ -42,3 +42,7 @@ IDX_TO_MAP_TYPE = {
 MAP_TYPES_TO_IDX = {v: k for k, v in IDX_TO_MAP_TYPE.items()}
 MAP_TYPES = [IDX_TO_MAP_TYPE[i] for i in range(len(IDX_TO_MAP_TYPE))]
 NUM_MAP_TYPES = len(MAP_TYPES)
+
+OBJECTS_TO_BE_FILTERED = [
+    "AluminumFoil", "Apple", "Bread", "Cloth", "HandTowel", "KeyChain", "LaundryHamper", "Lettuce", "Pillow", "Potato", "TableTopDecor", "Tomato", "Towel", 
+]

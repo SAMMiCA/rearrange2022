@@ -610,52 +610,52 @@ class DataCollectionAgent:
                 filename=filename
             )
 
-            inst_detected = observations["instseg"]["inst_detected"][0, sampler_id]
-            add_image = False
-            for nonzero_obj_id in inst_detected.nonzero():
-                object_id = nonzero_obj_id.item()
-                for i in range(inst_detected[object_id]):
-                    mask = observations["instseg"]["inst_masks"][0, sampler_id][object_id] & (2 ** i)
-                    pos = torch.where(mask)
-                    xmin = torch.min(pos[1]).item()
-                    xmax = torch.max(pos[1]).item()
-                    ymin = torch.min(pos[0]).item()
-                    ymax = torch.max(pos[0]).item()
-                    width = xmax - xmin
-                    height = ymax - ymin
-                    # Do not save too much small objects
-                    if width < 15 and height < 15:
-                        continue
-                    poly = binary_mask_to_polygon(mask.detach().cpu().numpy())
-                    bbox = [xmin, ymin, width, height]
-                    area = width * height
-                    # update annotation for annotations
-                    data_anno = dict(
-                        image_id=self.image_id,
-                        id=self.coco_id,
-                        category_id=object_id+1,
-                        bbox=bbox,
-                        area=area,
-                        segmentation=poly,
-                        iscrowd=0,
-                    )
-                    self.annotations.append(data_anno)
-                    self.coco_id += 1
-                    add_image = True
+            # inst_detected = observations["instseg"]["inst_detected"][0, sampler_id]
+            # add_image = False
+            # for nonzero_obj_id in inst_detected.nonzero():
+            #     object_id = nonzero_obj_id.item()
+            #     for i in range(inst_detected[object_id]):
+            #         mask = observations["instseg"]["inst_masks"][0, sampler_id][object_id] & (2 ** i)
+            #         pos = torch.where(mask)
+            #         xmin = torch.min(pos[1]).item()
+            #         xmax = torch.max(pos[1]).item()
+            #         ymin = torch.min(pos[0]).item()
+            #         ymax = torch.max(pos[0]).item()
+            #         width = xmax - xmin
+            #         height = ymax - ymin
+            #         # Do not save too much small objects
+            #         if width < 15 and height < 15:
+            #             continue
+            #         poly = binary_mask_to_polygon(mask.detach().cpu().numpy())
+            #         bbox = [xmin, ymin, width, height]
+            #         area = width * height
+            #         # update annotation for annotations
+            #         data_anno = dict(
+            #             image_id=self.image_id,
+            #             id=self.coco_id,
+            #             category_id=object_id+1,
+            #             bbox=bbox,
+            #             area=area,
+            #             segmentation=poly,
+            #             iscrowd=0,
+            #         )
+            #         self.annotations.append(data_anno)
+            #         self.coco_id += 1
+            #         add_image = True
             
-            if add_image:
-                self.images.append(
-                    dict(
-                        id=self.image_id,
-                        file_name=os.path.relpath(
-                            os.path.relpath(os.path.join(sampler_dir, "rgb", f"{filename}.png")),
-                            os.path.relpath(self.data_dir)
-                        ),
-                        height=self.config.SCREEN_SIZE,
-                        width=self.config.SCREEN_SIZE,
-                    )
-                )
-                self.image_id += 1
+            # if add_image:
+            #     self.images.append(
+            #         dict(
+            #             id=self.image_id,
+            #             file_name=os.path.relpath(
+            #                 os.path.relpath(os.path.join(sampler_dir, "rgb", f"{filename}.png")),
+            #                 os.path.relpath(self.data_dir)
+            #             ),
+            #             height=self.config.SCREEN_SIZE,
+            #             width=self.config.SCREEN_SIZE,
+            #         )
+            #     )
+            #     self.image_id += 1
 
     @staticmethod
     def save_image_data(
@@ -725,13 +725,13 @@ class DataCollectionAgent:
     ):
         data_collection_completed = False
         try:
-            from pycocotools.coco import COCO
-            if os.path.exists(os.path.join(self.data_dir, "annotations.json")):
-                coco = COCO(os.path.join(self.data_dir, "annotations.json"))
-                self.image_id += len(coco.dataset["images"])
-                self.coco_id += len(coco.dataset["annotations"])
-                self.images.extend(coco.dataset["images"])
-                self.annotations.extend(coco.dataset["annotations"])
+            # from pycocotools.coco import COCO
+            # if os.path.exists(os.path.join(self.data_dir, "annotations.json")):
+            #     coco = COCO(os.path.join(self.data_dir, "annotations.json"))
+            #     self.image_id += len(coco.dataset["images"])
+            #     self.coco_id += len(coco.dataset["annotations"])
+            #     self.images.extend(coco.dataset["images"])
+            #     self.annotations.extend(coco.dataset["annotations"])
 
             self.data_collection()
             data_collection_completed = True
@@ -745,21 +745,21 @@ class DataCollectionAgent:
             )
             get_logger().exception(traceback.format_exc())
         finally:
-            self.save_json_data(
-                data=dict(
-                    images=self.images,
-                    annotations=self.annotations,
-                    categories=[
-                        {
-                            'id': it + 1,
-                            'name': name,
-                        }
-                        for it, name in enumerate(self.config.ORDERED_OBJECT_TYPES)
-                    ],
-                ),
-                dirpath=self.data_dir,
-                filename="annotations.json",
-            )
+            # self.save_json_data(
+            #     data=dict(
+            #         images=self.images,
+            #         annotations=self.annotations,
+            #         categories=[
+            #             {
+            #                 'id': it + 1,
+            #                 'name': name,
+            #             }
+            #             for it, name in enumerate(self.config.ORDERED_OBJECT_TYPES)
+            #         ],
+            #     ),
+            #     dirpath=self.data_dir,
+            #     filename="annotations.json",
+            # )
             if data_collection_completed:
                 if self.worker_id == 0:
                     self.results_queue.put(("train_stopped", 0))

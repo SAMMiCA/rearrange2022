@@ -90,10 +90,14 @@ def main():
         for fname in sorted(os.listdir(os.path.join(args.base_dir, dir, 'npz_data'))):
             fpath = os.path.join(args.base_dir, dir, 'npz_data', fname)
             data = np.load(fpath)
-            data = {
-                key: data[key]
-                for key in data.files
-            }
+            try:
+                data = {
+                    key: data[key]
+                    for key in data.files
+                }
+            except:
+                import pdb; pdb.set_trace()
+                continue
 
             inst_detected = data["instseg_inst_detected"]
             add_image = False
@@ -144,6 +148,7 @@ def main():
                         width=224,
                     )
                 )
+            image_id += 1
 
     save_coco(images, annotations, args)
 
