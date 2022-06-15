@@ -148,7 +148,7 @@ def main():
                         width=224,
                     )
                 )
-            image_id += 1
+                image_id += 1
 
     save_coco(images, annotations, args)
 

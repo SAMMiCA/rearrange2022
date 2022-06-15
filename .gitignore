@@ -156,3 +156,6 @@ dmypy.json
 
 # Cython debug symbols
 cython_debug/
+custom/subtask_model/models/
+custom/segmentation_model/models/
+custom/hlsm/models/
