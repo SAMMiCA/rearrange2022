@@ -16,7 +16,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, Dataset, RandomSampler, SequentialSampler, BatchSampler
 from torch.utils.data.distributed import DistributedSampler
-from custom.constants import ORDERED_OBJECT_TYPES
+from custom.constants import NUM_OBJECT_TYPES, ORDERED_OBJECT_TYPES
 from custom.segmentation_model.models import get_model_instance_segmentation
 from custom.segmentation_model import utils, coco_utils
 from custom.segmentation_model.engine import train_one_epoch, evaluate
@@ -159,7 +159,7 @@ def main(args):
     print("Loading data...")
 
     train_dataset = coco_utils.get_dataset(args.root_dir, "train", coco_utils.get_transform(True))
-    valid_dataset = coco_utils.get_dataset(args.root_dir, "valid", coco_utils.get_transform(True))
+    valid_dataset = coco_utils.get_dataset(args.root_dir, "valid", coco_utils.get_transform(False))
     print("Data loading DONE.")
 
     print("Creating data loaders...")
@@ -186,7 +186,7 @@ def main(args):
 
     print("Creating model...")
     model = get_model_instance_segmentation(
-        num_classes=len(ORDERED_OBJECT_TYPES),
+        num_classes=NUM_OBJECT_TYPES,
         hidden_size=args.hidden_size,
     ).to(device)
     if args.distributed and args.sync_bn:

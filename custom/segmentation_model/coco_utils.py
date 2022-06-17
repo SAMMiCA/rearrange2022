@@ -118,7 +118,6 @@ def get_dataset(root, mode, transforms):
     
     ann_file = f"{mode}_anno.json"
     t = [
-        FilterAndRemapCocoCategories(categories=list(range(1, NUM_OBJECT_TYPES))),
         ConvertCocoPolysToMask(),
     ]
     if transforms is not None:
