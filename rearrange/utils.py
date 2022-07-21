@@ -488,7 +488,7 @@ class ObjectInteractablePostionsCache:
                 objectId=obj["objectId"],
                 positions=reachable_positions,
             ).metadata
-            assert metadata["lastActionSuccess"]
+            assert metadata["lastActionSuccess"], f'{metadata["errorMessage"]}'
             self._key_to_positions[obj_key] = metadata["actionReturn"]
 
             if should_teleport:
