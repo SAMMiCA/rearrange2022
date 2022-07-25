@@ -1,131 +1,239 @@
 from typing import Tuple, Sequence, Optional, Dict, Any, Type, List
+from abc import abstractmethod
 import gym
 import numpy as np
-import copy
 import platform
 
+import copy
+import ai2thor.platform
 import torch
 from torch import nn, cuda, optim
 import torchvision
 
-import ai2thor
-import ai2thor.platform
 from allenact.base_abstractions.sensor import Sensor, SensorSuite
 from allenact.base_abstractions.preprocessor import SensorPreprocessorGraph
 from allenact.base_abstractions.experiment_config import (
     MachineParams,
     split_processes_onto_devices,
 )
-from allenact.algorithms.onpolicy_sync.losses import PPO
-from allenact.algorithms.onpolicy_sync.losses.ppo import PPOConfig
 from allenact.embodiedai.sensors.vision_sensors import IMAGENET_RGB_MEANS, IMAGENET_RGB_STDS
 from allenact.embodiedai.preprocessors.resnet import ResNetPreprocessor
-from allenact.utils.system import get_logger
 from allenact.utils.experiment_utils import LinearDecay, PipelineStage, Builder
+from allenact.utils.system import get_logger
 from allenact.utils.misc_utils import partition_sequence, md5_hash_str_as_int
-from baseline_configs.one_phase.one_phase_rgb_base import OnePhaseRGBBaseExperimentConfig
+
+import datagen.datagen_utils as datagen_utils
 from baseline_configs.rearrange_base import RearrangeBaseExperimentConfig
 from rearrange.constants import OPENABLE_OBJECTS, PICKUPABLE_OBJECTS
 from rearrange.sensors import DepthRearrangeSensor, RGBRearrangeSensor, InWalkthroughPhaseSensor, UnshuffledRGBRearrangeSensor
-
-import datagen.datagen_utils as datagen_utils
-from rearrange.tasks import RearrangeTaskSampler
-
-from task_aware_rearrange.expert import OnePhaseSubtaskAndActionExpertSensor
-from task_aware_rearrange.preprocessors import SubtaskActionExpertPreprocessor, SubtaskExpertPreprocessor
-from task_aware_rearrange.subtasks import NUM_SUBTASKS
+from task_aware_rearrange.sensors import PoseSensor, SemanticSegmentationSensor, UnshuffledDepthRearrangeSensor, UnshuffledPoseSensor, UnshuffledSemanticSegmentationSensor
 from task_aware_rearrange.utils import get_open_x_displays
 
 
-class ExpertTestExpConfig(RearrangeBaseExperimentConfig):
-    
+class TaskAwareBaseExperimentConfig(RearrangeBaseExperimentConfig):
+
     CNN_PREPROCESSOR_TYPE_AND_PRETRAINING = ("RN50", "clip")
-    NUM_PROCESSES: int = 4
+    ORDERED_OBJECT_TYPES = list(sorted(PICKUPABLE_OBJECTS + OPENABLE_OBJECTS))
 
     # Sensor Info
-    REFERENCE_DEPTH = True
     REFERENCE_SEGMENTATION = True
     REFERENCE_POSE = False
     REFERENCE_INVENTORY = False
 
-    EXPERT_SUBTASK_ACTION_UUID = "expert_subtask_action"
-    EXPERT_ACTION_UUID = "expert_action"
-    EXPERT_SUBTASK_UUID = "expert_subtask"
+    EGOCENTRIC_RAW_RGB_UUID = "rgb_raw"
+    UNSHUFFLED_RAW_RGB_UUID = "unshuffled_rgb_raw"
+    DEPTH_UUID = "depth"
+    UNSHUFFLED_DEPTH_UUID = "unshuffled_depth"
+    SEMANTIC_SEGMENTATION_UUID = "semseg"
+    UNSHUFFLED_SEMANTIC_SEGMENTATION_UUID = "unshuffled_semseg"
+    POSE_UUID = "pose"
+    UNSHUFFLED_POSE_UUID = "unshuffled_pose"
+    INVENTORY_UUID = "inventory"
+    SEMANTIC_MAP_UUID = "semmap"
+    UNSHUFFLED_SEMANTIC_MAP_UUID = "unshuffled_semmap"
+    SUBTASK_EXPERT_UUID = "subtask_expert"
 
-    EGOCENTRIC_RAW_RGB_UUID = "raw_rgb"
-    UNSHUFFLED_RAW_RGB_UUID = "w_raw_rgb"
+    # Model parameters
+    IS_WALKTHROUGH_PHASE_EMBEDING_DIM: int = 32
+    RNN_TYPE: str = "LSTM"
+
+    RGB_NORMALIZATION = False
+    DEPTH_NORMALIZATION = False
 
     # Environment parameters
     THOR_CONTROLLER_KWARGS = {
         **RearrangeBaseExperimentConfig.THOR_CONTROLLER_KWARGS,
-        "renderDepthImage": REFERENCE_DEPTH,
+        "renderDepthImage": True,
         "renderSemanticSegmentation": REFERENCE_SEGMENTATION,
         "renderInstanceSegmentation": REFERENCE_SEGMENTATION,
     }
-    HEADLESS = False
+    HEADLESS = True
+
+    # Training parameters
+    DEVICE = torch.device('cuda')
 
     @classmethod
     def sensors(cls) -> Sequence[Sensor]:
+        mean, stdev = None, None
+        if cls.CNN_PREPROCESSOR_TYPE_AND_PRETRAINING is not None:
+            cnn_type, pretraining_type = cls.CNN_PREPROCESSOR_TYPE_AND_PRETRAINING
+            if pretraining_type.strip().lower() == "clip":
+                from allenact_plugins.clip_plugin.clip_preprocessors import (
+                    ClipResNetPreprocessor,
+                )
+
+                mean = ClipResNetPreprocessor.CLIP_RGB_MEANS
+                stdev = ClipResNetPreprocessor.CLIP_RGB_STDS
+            else:
+                mean = IMAGENET_RGB_MEANS
+                stdev = IMAGENET_RGB_STDS
+
         sensors = [
             RGBRearrangeSensor(
                 height=cls.SCREEN_SIZE,
                 width=cls.SCREEN_SIZE,
-                use_resnet_normalization=False,
-                uuid=cls.EGOCENTRIC_RAW_RGB_UUID,
+                use_resnet_normalization=True,
+                uuid=cls.EGOCENTRIC_RGB_UUID,
+                mean=mean,
+                stdev=stdev,
             ),
             UnshuffledRGBRearrangeSensor(
                 height=cls.SCREEN_SIZE,
                 width=cls.SCREEN_SIZE,
-                use_resnet_normalization=False,
-                uuid=cls.UNSHUFFLED_RAW_RGB_UUID,
+                use_resnet_normalization=True,
+                uuid=cls.UNSHUFFLED_RGB_UUID,
+                mean=mean,
+                stdev=stdev,
             ),
-            OnePhaseSubtaskAndActionExpertSensor(
-                action_space=(
-                    NUM_SUBTASKS,
-                    len(cls.actions()),
-                ),
-                uuid=cls.EXPERT_SUBTASK_ACTION_UUID,
-                verbose=True,
+            DepthRearrangeSensor(
+                height=cls.SCREEN_SIZE,
+                width=cls.SCREEN_SIZE,
+                uuid=cls.DEPTH_UUID,
+                use_normalization=cls.DEPTH_NORMALIZATION,
+            ),
+            UnshuffledDepthRearrangeSensor(
+                height=cls.SCREEN_SIZE,
+                width=cls.SCREEN_SIZE,
+                uuid=cls.UNSHUFFLED_DEPTH_UUID,
+                use_normalization=cls.DEPTH_NORMALIZATION,
+            ),
+            PoseSensor(
+                reference_pose=cls.REFERENCE_POSE,
+                uuid=cls.POSE_UUID,
+            ),
+            UnshuffledPoseSensor(
+                reference_pose=cls.REFERENCE_POSE,
+                uuid=cls.UNSHUFFLED_POSE_UUID,
             ),
         ]
+
+        if cls.REFERENCE_SEGMENTATION:
+            sensors.append(
+                SemanticSegmentationSensor(
+                    ordered_object_types=cls.ORDERED_OBJECT_TYPES,
+                    height=cls.SCREEN_SIZE,
+                    width=cls.SCREEN_SIZE,
+                    uuid=cls.SEMANTIC_SEGMENTATION_UUID,
+                )
+            )
+            sensors.append(
+                UnshuffledSemanticSegmentationSensor(
+                    ordered_object_types=cls.ORDERED_OBJECT_TYPES,
+                    height=cls.SCREEN_SIZE,
+                    width=cls.SCREEN_SIZE,
+                    uuid=cls.UNSHUFFLED_SEMANTIC_SEGMENTATION_UUID,
+                )
+            )
+        else:
+            # add raw rgb sensors to infer semantic segmentation masks
+            sensors.append(
+                RGBRearrangeSensor(
+                    height=cls.SCREEN_SIZE,
+                    width=cls.SCREEN_SIZE,
+                    use_resnet_normalization=False,
+                    uuid=cls.EGOCENTRIC_RAW_RGB_UUID,
+                )
+            )
+            sensors.append(
+                UnshuffledRGBRearrangeSensor(
+                    height=cls.SCREEN_SIZE,
+                    width=cls.SCREEN_SIZE,
+                    use_resnet_normalization=False,
+                    uuid=cls.UNSHUFFLED_RAW_RGB_UUID,
+                )
+            )
+        
         return sensors
-    
-    @classmethod
-    def create_subtask_action_expert_preprocessor_builder(
-        cls,
-        in_uuids: Sequence[str],
-        out_uuid: str,
-    ):
-        return SubtaskActionExpertPreprocessor(
-            input_uuids=in_uuids,
-            output_uuid=out_uuid,
-            device=cls.DEVICE,            
-        )
 
     @classmethod
-    def create_subtask_expert_preprocessor_builder(
+    def create_resnet_bulder(
         cls,
-        in_uuids: Sequence[str],
+        in_uuid: str,
         out_uuid: str,
     ):
-        return SubtaskExpertPreprocessor(
-            input_uuids=in_uuids,
-            output_uuid=out_uuid,
-            device=cls.DEVICE,
-        )
+        if cls.CNN_PREPROCESSOR_TYPE_AND_PRETRAINING is None:
+            raise NotImplementedError
+        
+        cnn_type, pretraining_type = cls.CNN_PREPROCESSOR_TYPE_AND_PRETRAINING
+        if pretraining_type == "imagenet":
+            assert cnn_type in (
+                "RN18",
+                "RN50",
+            ), "Only allow using RN18/RN50 with 'imagenet' pretrained weights."
+
+            return ResNetPreprocessor(
+                input_height=cls.THOR_CONTROLLER_KWARGS["height"],
+                input_width=cls.THOR_CONTROLLER_KWARGS["width"],
+                output_width=7,
+                output_height=7,
+                output_dims=512 if "18" in cnn_type else 2048,
+                pool=False,
+                torchvision_resnet_model=getattr(
+                    torchvision.models, f"resnet{cnn_type.replace('RN', '')}"
+                ),
+                input_uuids=[in_uuid],
+                output_uuid=out_uuid,
+                device=cls.DEVICE,
+            )
+        elif pretraining_type == "clip":
+            from allenact_plugins.clip_plugin.clip_preprocessors import ClipResNetPreprocessor
+            import clip
+
+            clip.load(cnn_type, "cpu")
+
+            return ClipResNetPreprocessor(
+                rgb_input_uuid=in_uuid,
+                clip_model_type=cnn_type,
+                pool=False,
+                output_uuid=out_uuid,
+                device=cls.DEVICE,
+            )
+        else:
+            raise NotImplementedError
+        
 
     @classmethod
     def create_preprocessor_graph(cls, mode: str) -> SensorPreprocessorGraph:
-        preprocessors = [
-            cls.create_subtask_action_expert_preprocessor_builder(
-                in_uuids=[cls.EXPERT_SUBTASK_ACTION_UUID],
-                out_uuid=cls.EXPERT_ACTION_UUID,
-            ),
-            cls.create_subtask_expert_preprocessor_builder(
-                in_uuids=[cls.EXPERT_SUBTASK_ACTION_UUID],
-                out_uuid=cls.EXPERT_SUBTASK_UUID,
-            ),
-        ]
+        preprocessors = []
+        additional_output_uuids = []
+
+        if not cls.REFERENCE_SEGMENTATION:
+            # TODO: Implement Segmentation Inference Model
+            pass
+
+        if cls.CNN_PREPROCESSOR_TYPE_AND_PRETRAINING is not None:
+            preprocessors.append(
+                cls.create_resnet_bulder(
+                    in_uuid=cls.EGOCENTRIC_RGB_UUID,
+                    out_uuid=cls.EGOCENTRIC_RGB_RESNET_UUID,
+                )
+            )
+            preprocessors.append(
+                cls.create_resnet_bulder(
+                    in_uuid=cls.UNSHUFFLED_RGB_UUID,
+                    out_uuid=cls.UNSHUFFLED_RGB_RESNET_UUID,
+                )
+            )
 
         return (
             None
@@ -135,10 +243,21 @@ class ExpertTestExpConfig(RearrangeBaseExperimentConfig):
                 {
                     "source_observation_spaces": SensorSuite(cls.sensors()).observation_spaces,
                     "preprocessors": preprocessors,
-                    "additional_output_uuids": None,
+                    "additional_output_uuids": additional_output_uuids,
                 }
             )
         )
+
+    @classmethod
+    @abstractmethod
+    def num_valid_processes(cls) -> int:
+        raise NotImplementedError
+
+    @classmethod
+    @abstractmethod
+    def num_test_processes(cls) -> int:
+        raise NotImplementedError
+
 
     @classmethod
     def machine_params(cls, mode="train", **kwargs) -> MachineParams:
@@ -147,12 +266,24 @@ class ExpertTestExpConfig(RearrangeBaseExperimentConfig):
         has_gpu = num_gpus != 0
 
         sampler_devices = None
-        nprocesses = cls.NUM_PROCESSES if torch.cuda.is_available() else 1
-        devices = (
-            list(range(min(nprocesses, num_gpus)))
-            if has_gpu
-            else [torch.device("cpu")]
-        )
+        if mode == "train":
+            nprocesses = cls.num_train_processes() if torch.cuda.is_available() else 1
+            devices = (
+                list(range(min(nprocesses, num_gpus)))
+                if has_gpu
+                else [torch.device("cpu")]
+            )
+        elif mode == "valid":
+            devices = [num_gpus - 1] if has_gpu else [torch.device("cpu")]
+            nprocesses = cls.num_valid_processes() if has_gpu else 0
+        else:
+            nprocesses = cls.num_test_processes() if has_gpu else 1
+            devices = (
+                list(range(min(nprocesses, num_gpus)))
+                if has_gpu
+                else [torch.device("cpu")]
+            )
+
         nprocesses = split_processes_onto_devices(
             nprocesses=nprocesses, ndevices=len(devices)
         )
@@ -266,49 +397,3 @@ class ExpertTestExpConfig(RearrangeBaseExperimentConfig):
         kwargs["sensors"] = sensors
 
         return kwargs
-
-    @classmethod
-    def make_sampler_fn(
-        cls,
-        stage: str,
-        force_cache_reset: bool,
-        allowed_scenes: Optional[Sequence[str]],
-        seed: int,
-        epochs: int,
-        scene_to_allowed_rearrange_inds: Optional[Dict[str, Sequence[int]]] = None,
-        x_display: Optional[str] = None,
-        sensors: Optional[Sequence[Sensor]] = None,
-        thor_controller_kwargs: Optional[Dict] = None,
-        **kwargs,
-    ) -> RearrangeTaskSampler:
-        """Return a RearrangeTaskSampler."""
-        sensors = cls.sensors() if sensors is None else sensors
-        if "mp_ctx" in kwargs:
-            del kwargs["mp_ctx"]
-        assert not cls.RANDOMIZE_START_ROTATION_DURING_TRAINING
-        return RearrangeTaskSampler.from_fixed_dataset(
-            run_walkthrough_phase=False,
-            run_unshuffle_phase=True,
-            stage=stage,
-            allowed_scenes=allowed_scenes,
-            scene_to_allowed_rearrange_inds=scene_to_allowed_rearrange_inds,
-            rearrange_env_kwargs=dict(
-                force_cache_reset=force_cache_reset,
-                **cls.REARRANGE_ENV_KWARGS,
-                controller_kwargs={
-                    "x_display": x_display,
-                    **cls.THOR_CONTROLLER_KWARGS,
-                    **(
-                        {} if thor_controller_kwargs is None else thor_controller_kwargs
-                    ),
-                },
-            ),
-            seed=seed,
-            sensors=SensorSuite(sensors),
-            max_steps=cls.MAX_STEPS,
-            discrete_actions=cls.actions(),
-            require_done_action=cls.REQUIRE_DONE_ACTION,
-            force_axis_aligned_start=cls.FORCE_AXIS_ALIGNED_START,
-            epochs=epochs,
-            **kwargs,
-        )

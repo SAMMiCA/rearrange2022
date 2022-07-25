@@ -62,6 +62,7 @@ if __name__ == "__main__":
     my_leaderboard_submission = {}
     for i_task in range(num_tasks_to_do):
         print(f"\nStarting task {i_task}")
+        task_subtasks = []
 
         # Get the next task from the task sampler, for One Phase Rearrangement
         # there is only the unshuffle phase (walkthrough happens at the same time implicitly).
@@ -89,6 +90,8 @@ if __name__ == "__main__":
             # print(
             #     f"(step {unshuffle_task.num_steps_taken()}) Expert Subtask: {IDX_TO_SUBTASK[esa[0]]}"
             # )
+            subtask_ind = esa[0]
+            task_subtasks.append(IDX_TO_SUBTASK[subtask_ind])
             action_ind = esa[-2]
             if unshuffle_task.num_steps_taken() % 10 == 0:
                 print(
@@ -108,7 +111,9 @@ if __name__ == "__main__":
             plt.pause(0.001)
 
         metrics = unshuffle_task.metrics()
+        metrics["task_info"]["unshuffle_subtasks"] = task_subtasks
         print(f"Both phases complete, metrics: '{metrics}'")
+        # import pdb; pdb.set_trace()
 
         task_info = metrics["task_info"]
         del metrics["task_info"]

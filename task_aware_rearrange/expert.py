@@ -313,7 +313,6 @@ class OnePhaseSubtaskAndActionExpertSensor(AbstractExpertActionSensor):
         """
         update and generate expert subtask
         """
-        _, goal_poses, cur_poses = task.env.poses
         if self.verbose:
             get_logger().info(
                 f'==== [STEP {task.num_steps_taken()}] ==== '
@@ -321,7 +320,19 @@ class OnePhaseSubtaskAndActionExpertSensor(AbstractExpertActionSensor):
             get_logger().info(
                 f'  ** IN update() method'
             )
+            get_logger().info(
+                f'    Last Expert Subtask: {self._last_subtask}[{self._last_subtask.get_subtask_idx()}]'
+            )
+            last_expert_action = None if len(self.expert_action_list) == 0 else self.expert_action_list[-1]
+            last_expert_action_str = None if last_expert_action is None else task.action_names()[last_expert_action]
+            get_logger().info(
+                f'    Last Expert Action: {last_expert_action_str}[{last_expert_action}]'
+            )
+            get_logger().info(
+                f'    Last Action Taken: {task.action_names()[action_taken] if action_taken else None}[{action_taken}] | Success: {action_success}'
+            )
 
+        _, goal_poses, cur_poses = task.env.poses
         if task.num_steps_taken() == 0:
             # At the first step of the task
             self._objects_to_rearrange = {
@@ -337,7 +348,7 @@ class OnePhaseSubtaskAndActionExpertSensor(AbstractExpertActionSensor):
             get_logger().info(
                 f'    priorities: {self.object_name_to_priority}'
             )
-            
+
         # update objects has been seen
         for gp, cp in zip(goal_poses, cur_poses):
             if (
@@ -356,10 +367,18 @@ class OnePhaseSubtaskAndActionExpertSensor(AbstractExpertActionSensor):
                     task=task, env_type="Unshuffle", rearrange_targets=self._objects_to_rearrange
                 ):
                     self.seen_obj_names_unshuffle[gp["name"]] = cp
+                    if self.verbose:
+                        get_logger().info(
+                            f'      {cp["name"]} is seen in unshuffle env.... '
+                        )
                 if gp["name"] in self.get_object_names_from_current_view(
                     task=task, env_type="Walkthrough", rearrange_targets=self._objects_to_rearrange
                 ):
                     self.seen_obj_names_walkthrough[gp["name"]] = gp
+                    if self.verbose:
+                        get_logger().info(
+                            f'      {gp["name"]} is seen in walkthrough env.... '
+                        )
             elif (
                 (gp["broken"] == cp["broken"] == False)
                 and RearrangeTHOREnvironment.are_poses_equal(gp, cp)
@@ -385,25 +404,6 @@ class OnePhaseSubtaskAndActionExpertSensor(AbstractExpertActionSensor):
                 f'      walkthrough env.: {self.seen_obj_names_walkthrough.keys()}'
             )
 
-        held_object = task.env.held_object
-        if held_object:
-            self._last_held_object_name = held_object['name']
-            if self.verbose:
-                get_logger().info(
-                    f'    agent is holding object [{held_object["name"]}]... '
-                )
-        if self.verbose:
-            get_logger().info(
-                f'    Last Expert Subtask: {self._last_subtask}[{self._last_subtask.get_subtask_idx()}]'
-            )
-            last_expert_action = None if len(self.expert_action_list) == 0 else self.expert_action_list[-1]
-            last_expert_action_str = None if last_expert_action is None else task.action_names()[last_expert_action]
-            get_logger().info(
-                f'    Last Expert Action: {last_expert_action_str}[{last_expert_action}]'
-            )
-            get_logger().info(
-                f'    Last Action Taken: {task.action_names()[action_taken] if action_taken else None}[{action_taken}] | Success: {action_success}'
-            )
         if action_taken is not None:
             assert action_success is not None
 
@@ -411,22 +411,24 @@ class OnePhaseSubtaskAndActionExpertSensor(AbstractExpertActionSensor):
             last_expert_action = self.expert_action_list[-1]
             agent_took_expert_action = action_taken == last_expert_action
             action_str = action_names[action_taken]
+            was_nav_action = any(k in action_str for k in ["move", "rotate", "look"])
 
             assert self._last_subtask is not None
             last_expert_subtask = copy.deepcopy(self._last_subtask)
-            was_interact_subtask = last_expert_subtask.is_interact_subtask()
-            was_nav_action = any(k in action_str for k in ["move", "rotate", "look"])
 
             if agent_took_expert_action:
-                # when the agent took expert action
+                # assert last_expert_subtask.get_expert_action_str() == action_str
                 if self.verbose:
                     get_logger().info(
                         f'      Agent took expert action!'
                     )
-                if "open_by_type" in action_str:
-                    self.object_name_to_priority[
-                        self._last_to_interact_object_pose["name"]
-                    ] += 1
+
+                if (
+                    "pickup_" in action_str
+                    and action_success
+                ):
+                    self._name_of_object_we_wanted_to_pickup = self._last_to_interact_object_pose["name"]
+                
                 if "drop_held_object_with_snap" in action_str:
                     if self._name_of_object_we_wanted_to_pickup is not None:
                         self.object_name_to_priority[
@@ -434,483 +436,63 @@ class OnePhaseSubtaskAndActionExpertSensor(AbstractExpertActionSensor):
                         ] += 1
                     else:
                         self.object_name_to_priority[self._last_held_object_name] += 1
-
-                if action_success:
-                    if self.verbose:
-                        get_logger().info(
-                            f'      Action succeeded!'
-                        )
-                    if was_interact_subtask:
-                        assert action_str == last_expert_subtask.get_expert_action_str()
+                
+                if "open_by_type" in action_str:
+                    self.object_name_to_priority[
+                        self._last_to_interact_object_pose["name"]
+                    ] += 1
+                
+                if not action_success:
+                    if (
+                        "pickup_" in action_str
+                        or "open_by_type_" in action_str
+                    ):
                         assert self._last_to_interact_object_pose is not None
-                        if self.verbose:
-                            get_logger().info(
-                                f'      Interaction correctly done!'
-                            )
-                        
-                        if last_expert_subtask.subtask_type == "PickupObject":
-                            self._name_of_object_we_wanted_to_pickup = self._last_to_interact_object_pose[
-                                "name"
-                            ]
-                            self._last_to_interact_object_pose["target_map"] = "Walkthrough"
-                            for k in ["position", "rotation"]:
-                                self._last_to_interact_object_pose[k] = task.env.obj_name_to_walkthrough_start_pose[
-                                    held_object["name"]
-                                ][k]
-
-                        elif (set(self.seen_obj_names_unshuffle) | set(self.seen_obj_names_walkthrough)):
-                            if self.verbose:
-                                for obj_name in (
-                                    set(self.seen_obj_names_unshuffle) | set(self.seen_obj_names_walkthrough)
-                                ):
-                                    get_logger().info(
-                                        f'      priority[{obj_name}]: {self.object_name_to_priority[obj_name]}'
-                                    )
-                                get_logger().info(
-                                    self._objects_to_rearrange.keys()
-                                )
-                            target_obj_name = None
-                            failed_places_and_min_dist = (float("inf"), float("inf"))
-                            for obj_name in (
-                                set(self.seen_obj_names_unshuffle) | set(self.seen_obj_names_walkthrough)
-                            ):
-                                if self.object_name_to_priority[obj_name] < self.max_priority_per_object:
-                                    priority = self.object_name_to_priority[obj_name]
-                                    position = next(
-                                        (
-                                            obj["position"]
-                                            for obj in task.env.last_event.metadata["objects"]
-                                            if obj["name"] == obj_name
-                                        ),
-                                        None
-                                    )
-                                    priority_and_dist_to_object = (
-                                        priority,
-                                        IThorEnvironment.position_dist(
-                                            task.env.get_agent_location(), position, ignore_y=True, l1_dist=True
-                                        )
-                                    )
-                                    if priority_and_dist_to_object < failed_places_and_min_dist:
-                                        failed_places_and_min_dist = priority_and_dist_to_object
-                                        target_obj_name = obj_name
-
-                            self._last_to_interact_object_pose = None
-                            if target_obj_name is not None:
-                                # if target_obj_name in self.seen_obj_names_unshuffle:
-                                #     target_obj = self.seen_obj_names_unshuffle[target_obj_name]
-                                # else:
-                                #     target_obj = self.seen_obj_names_walkthrough[target_obj_name]
-                                #     # objectId and positions should be replaced.
-                                #     for k in ["position", "rotation"]:
-                                #         target_obj[k] = next(
-                                #             (
-                                #                 obj[k] 
-                                #                 for obj in task.env.last_event.metadata["objects"]
-                                #                 if obj["name"] == target_obj["name"]
-                                #             ),
-                                #             None
-                                #         )
-                                                
-                                #     target_obj["objectId"] = next(
-                                #         (
-                                #             obj["objectId"]
-                                #             for obj in task.env.last_event.metadata["objects"]
-                                #             if obj["name"] == target_obj["name"]
-                                #         ),
-                                #         None
-                                #     )
-                                #     if target_obj["objectId"] is None:
-                                #         raise Exception
-                                target_obj = next(
-                                    (
-                                        cp for cp in cur_poses
-                                        if cp["name"] == target_obj_name
-                                    ),
-                                    None
-                                )
-                                assert target_obj is not None
-                            
-                                self._last_to_interact_object_pose = target_obj
-                                self._last_to_interact_object_pose["target_map"] = "Unshuffle"
-                        
-                        else:
-                            self._last_to_interact_object_pose = None
-
-                        self._last_subtask.next_subtask(
-                            obj_type=self._last_to_interact_object_pose["type"] if (
-                                self._last_to_interact_object_pose and "type" in self._last_to_interact_object_pose
-                            ) else None, 
-                            target_map=self._last_to_interact_object_pose["target_map"] if (
-                                self._last_to_interact_object_pose and "target_map" in self._last_to_interact_object_pose
-                            ) else None,
-                        )
-
-                    elif "Explore" in last_expert_subtask.subtask_type:
-                        if (set(self.seen_obj_names_unshuffle) | set(self.seen_obj_names_walkthrough)):
-                            # If found something different,
-                            # Go to there...
-                            # found object should be assigned to Goto Subtask...
-                            target_obj_name = None
-                            failed_places_and_min_dist = (float("inf"), float("inf"))
-                            for obj_name in (
-                                set(self.seen_obj_names_unshuffle) | set(self.seen_obj_names_walkthrough)
-                            ):
-                                if self.object_name_to_priority[obj_name] < self.max_priority_per_object:
-                                    priority = self.object_name_to_priority[obj_name]
-                                    position = next(
-                                        (
-                                            obj["position"]
-                                            for obj in task.env.last_event.metadata["objects"]
-                                            if obj["name"] == obj_name
-                                        ),
-                                        None
-                                    )
-                                    priority_and_dist_to_object = (
-                                        priority,
-                                        IThorEnvironment.position_dist(
-                                            task.env.get_agent_location(), position, ignore_y=True, l1_dist=True
-                                        )
-                                    )
-                                    if priority_and_dist_to_object < failed_places_and_min_dist:
-                                        failed_places_and_min_dist = priority_and_dist_to_object
-                                        target_obj_name = obj_name
-                            
-                            if target_obj_name is not None:
-                                # if target_obj_name in self.seen_obj_names_unshuffle:
-                                #     target_obj = self.seen_obj_names_unshuffle[target_obj_name]
-                                # else:
-                                #     target_obj = self.seen_obj_names_walkthrough[target_obj_name]
-                                #     for k in ["position", "rotation"]:
-                                #         target_obj[k] = next(
-                                #             (
-                                #                 obj[k] 
-                                #                 for obj in task.env.last_event.metadata["objects"]
-                                #                 if obj["name"] == target_obj["name"]
-                                #             ),
-                                #             None
-                                #         )
-                                #     target_obj["objectId"] = next(
-                                #         (
-                                #             obj["objectId"]
-                                #             for obj in task.env.last_event.metadata["objects"]
-                                #             if obj["name"] == target_obj["name"]
-                                #         ),
-                                #         None
-                                #     )
-                                #     if target_obj["objectId"] is None:
-                                #         raise Exception
-                                target_obj = next(
-                                    (
-                                        cp for cp in cur_poses
-                                        if cp["name"] == target_obj_name
-                                    ),
-                                    None
-                                )
-                                assert target_obj is not None
-                                self._last_to_interact_object_pose = target_obj
-                                self._last_to_interact_object_pose["target_map"] = "Unshuffle"
-                                if self.verbose:
-                                    get_logger().info(
-                                        f'      Found object to rearrage! Target: {target_obj["name"]}'
-                                    )
-
-                                self._last_subtask.next_subtask(
-                                    obj_type=target_obj["type"],
-                                    target_map="Unshuffle",
-                                )
-
-                    elif "Goto" in last_expert_subtask.subtask_type:
-                        assert (
-                            self._last_to_interact_object_pose is not None
-                            and "target_map" in self._last_to_interact_object_pose
-                        )
-                        if (
-                            held_object is not None 
-                            and self._last_to_interact_object_pose["name"] != held_object["name"]
-                        ):
-                            self._last_to_interact_object_pose = copy.deepcopy(held_object)
-                            self._last_to_interact_object_pose["target_map"] = "Walkthrough"
-
-                        if self._last_to_interact_object_pose["target_map"] == "Walkthrough":
-                            for k in ["position", "rotation"]:
-                                self._last_to_interact_object_pose[k] = task.env.obj_name_to_walkthrough_start_pose[
-                                    self._last_to_interact_object_pose["name"]
-                                ][k]
-
-                        vis_objs = self.get_object_names_from_current_view(
-                            task=task, env_type=self._last_to_interact_object_pose["target_map"], rearrange_targets=self._objects_to_rearrange
-                        )
-                        if self._last_to_interact_object_pose["name"] in vis_objs:
-                            if self.verbose:
-                                get_logger().info(
-                                    f'      Target object is visible in the current view frame...'
-                                )
-                            if self.object_name_to_priority[self._last_to_interact_object_pose["name"]] > self.max_priority_per_object:
-                                # it is ignored when predict the next subtask.
-                                if self.verbose:
-                                    get_logger().info(
-                                        f'      Exceeded maximum number of trial for {self._last_to_interact_object_pose["name"]}'
-                                    )
-                                    get_logger().info(
-                                        f'      Let the agent start Explore...'
-                                    )
-                                self._last_subtask.set_subtask("Explore", None, None)
-                            else:
-                                if self.verbose:
-                                    get_logger().info(
-                                        f'      Let the agent do proper interaction...'
-                                    )
-                                self._last_subtask.next_subtask(held_object=held_object)
-                        else:
-                            if self.verbose:
-                                get_logger().info(
-                                    f'      Keep going to target: {self._last_to_interact_object_pose["name"]}'
-                                )
-                            obj_type = (
-                                self._last_to_interact_object_pose["type"] 
-                                if "type" in self._last_to_interact_object_pose else 
-                                self._last_to_interact_object_pose["objectType"]
-                            )
-                            self._last_subtask.set_subtask(
-                                subtask_type="Goto",
-                                obj_type=obj_type,
-                                target_map=self._last_to_interact_object_pose["target_map"]
-                            )
-                else:
-                    if self.verbose:
-                        get_logger().info(
-                            f'      Action failed...'
-                        )
-                    if was_interact_subtask:
-                        assert action_str == last_expert_subtask.get_expert_action_str()
-                        assert self._last_to_interact_object_pose is not None
-                        if self.verbose:
-                            get_logger().info(
-                                f'      current agent position invalidated for object {self._last_to_interact_object_pose["name"]}!'
-                            )
                         self._invalidate_interactable_loc_for_pose(
                             env=task.unshuffle_env,
                             location=task.unshuffle_env.get_agent_location(),
                             obj_pose=self._last_to_interact_object_pose,
                         )
-                        # if self.verbose:
-                        #     get_logger().info(
-                        #         f'      Then let the agent to go to target object {self._last_to_interact_object_pose["name"]} in another position'
-                        #     )
-                        # self._last_subtask.set_subtask(
-                        #     subtask_type="Goto",
-                        #     obj_type=self._last_to_interact_object_pose["type"],
-                        #     target_map=self._last_to_interact_object_pose["target_map"],
-                        # )
-                        if (set(self.seen_obj_names_unshuffle) | set(self.seen_obj_names_walkthrough)):
-                            if self.verbose:
-                                for obj_name in (
-                                    set(self.seen_obj_names_unshuffle) | set(self.seen_obj_names_walkthrough)
-                                ):
-                                    get_logger().info(
-                                        f'      priority[{obj_name}]: {self.object_name_to_priority[obj_name]}'
-                                    )
-                                get_logger().info(
-                                    self._objects_to_rearrange.keys()
-                                )
-                            target_obj_name = None
-                            failed_places_and_min_dist = (float("inf"), float("inf"))
-                            for obj_name in (
-                                set(self.seen_obj_names_unshuffle) | set(self.seen_obj_names_walkthrough)
-                            ):
-                                if self.object_name_to_priority[obj_name] < self.max_priority_per_object:
-                                    priority = self.object_name_to_priority[obj_name]
-                                    position = next(
-                                        (
-                                            obj["position"]
-                                            for obj in task.env.last_event.metadata["objects"]
-                                            if obj["name"] == obj_name
-                                        ),
-                                        None
-                                    )
-                                    priority_and_dist_to_object = (
-                                        priority,
-                                        IThorEnvironment.position_dist(
-                                            task.env.get_agent_location(), position, ignore_y=True, l1_dist=True
-                                        )
-                                    )
-                                    if priority_and_dist_to_object < failed_places_and_min_dist:
-                                        failed_places_and_min_dist = priority_and_dist_to_object
-                                        target_obj_name = obj_name
-
-                            self._last_to_interact_object_pose = None
-                            if target_obj_name is not None:
-                                # if target_obj_name in self.seen_obj_names_unshuffle:
-                                #     target_obj = next(
-                                #         (
-                                #             cp for cp in cur_poses
-                                #             if cp["name"] == target_obj_name
-                                #         ),
-                                #         None
-                                #     )
-                                #     assert target_obj is not None
-                                # else:
-                                #     target_obj = self.seen_obj_names_walkthrough[target_obj_name]
-                                #     # objectId and positions should be replaced.
-                                #     for k in ["position", "rotation"]:
-                                #         target_obj[k] = next(
-                                #             (
-                                #                 obj[k] 
-                                #                 for obj in task.env.last_event.metadata["objects"]
-                                #                 if obj["name"] == target_obj["name"]
-                                #             ),
-                                #             None
-                                #         )
-                                                
-                                #     target_obj["objectId"] = next(
-                                #         (
-                                #             obj["objectId"]
-                                #             for obj in task.env.last_event.metadata["objects"]
-                                #             if obj["name"] == target_obj["name"]
-                                #         ),
-                                #         None
-                                #     )
-                                #     if target_obj["objectId"] is None:
-                                #         raise Exception
-
-                                target_obj = next(
-                                    (
-                                        cp for cp in cur_poses
-                                        if cp["name"] == target_obj_name
-                                    ),
-                                    None
-                                )
-                                assert target_obj is not None
-                            
-                                self._last_to_interact_object_pose = target_obj
-                                self._last_to_interact_object_pose["target_map"] = "Unshuffle"
-                                obj_type = (
-                                    self._last_to_interact_object_pose["type"] 
-                                    if "type" in self._last_to_interact_object_pose 
-                                    else self._last_to_interact_object_pose["objectType"]
-                                )
-                                self._last_subtask.set_subtask(
-                                    subtask_type="Goto",
-                                    obj_type=obj_type,
-                                    target_map=self._last_to_interact_object_pose["target_map"],
-                                )
-                            else:
-                                self._last_subtask.set_subtask("Explore", None, None)
-                        else:
-                            self._last_subtask.set_subtask("Explore", None, None)
-                    else:
-                        if was_nav_action:
-                            if self.verbose:
-                                get_logger().info(
-                                    f'      update the navigation graph with failed action...'
-                                )
-                            shortest_path_navigator.update_graph_with_failed_action(
-                                stringcase.pascalcase(action_str)
-                            )
-                        elif (
-                            ("crouch" in action_str or "stand" in action_str)
-                            # and held_object is not None
-                        ):
-                            if self.verbose:
-                                get_logger().info(
-                                    f'      invalidate the agent current pose to interact target object...'
-                                )
-                            agent_loc = task.unshuffle_env.get_agent_location()
-                            agent_loc["standing"] = not agent_loc["standing"]
-                            # self._invalidate_interactable_loc_for_pose(
-                            #     env=task.unshuffle_env,
-                            #     location=agent_loc,
-                            #     obj_pose=task.unshuffle_env.obj_name_to_walkthrough_start_pose[
-                            #         self._last_held_object_name
-                            #     ]
-                            # )
-                            self._invalidate_interactable_loc_for_pose(
-                                env=task.unshuffle_env,
-                                location=agent_loc,
-                                obj_pose=self._last_to_interact_object_pose,
-                            )
+                    elif (
+                        "crouch" in action_str
+                        or "stand" in action_str
+                    ):
+                        held_object_name = task.unshuffle_env.held_object["name"]
+                        agent_loc = task.unshuffle_env.get_agent_location()
+                        agent_loc["standing"] = not agent_loc["standing"]
+                        self._invalidate_interactable_loc_for_pose(
+                            env=task.unshuffle_env,
+                            location=agent_loc,
+                            obj_pose=task.unshuffle_env.obj_name_to_walkthrough_start_pose[
+                                held_object_name
+                            ],
+                        )
+                
+            if not action_success:
+                if was_nav_action:
+                    shortest_path_navigator.update_graph_with_failed_action(
+                        stringcase.pascalcase(action_str)
+                    )
             else:
-                # when agent did not take the expert action
-                if "pickup" in action_str and action_success:
-                    # wrongly picked up something
-                    # the agent should put object down original place.
-                    if self.verbose:
-                        get_logger().info(
-                            f'      Wrongly picked up something...'
-                        )
-                    assert held_object is not None
-                    self._last_to_interact_object_pose = copy.deepcopy(held_object)
-                    self._last_to_interact_object_pose["target_map"] = "Walkthrough"
-                    for k in ["position", "rotation"]:
-                        self._last_to_interact_object_pose[k] = task.env.obj_name_to_walkthrough_start_pose[
-                            held_object["name"]
-                        ][k]
-                    if self.verbose:
-                        get_logger().info(
-                            f'      Let the agent go to original place of holding object...'
-                        )
-                    obj_type = (
-                        self._last_to_interact_object_pose["type"] 
-                        if "type" in self._last_to_interact_object_pose 
-                        else self._last_to_interact_object_pose["objectType"]
-                    )
-                    self._last_subtask.set_subtask(
-                        subtask_type="Goto",
-                        obj_type=obj_type,
-                        target_map=self._last_to_interact_object_pose["target_map"],
-                    )
-                elif "drop_held_object_with_snap" in action_str and action_success:
-                    # the agent just dropped the holding object unattendedly.
-                    # it should go to the object to pickup.
-                    if self.verbose:
-                        get_logger().info(
-                            f'      Wrongly dropped the holding object...'
-                        )
-                    assert held_object is None
-                    # if self.verbose:
-                    #     get_logger().info(
-                    #         f'      Let the agent to go to the object in order to pick up again...'
-                    #     )
-                    # # assign position/rotation info about the dropped object
-                    # self._last_to_interact_object_pose = next(
-                    #     (
-                    #         cp
-                    #         for cp in cur_poses
-                    #         if cp["name"] == self._last_to_interact_object_pose["name"]
-                    #     ),
-                    #     None
-                    # )
-                    # assert self._last_to_interact_object_pose is not None
-                    # self._last_to_interact_object_pose["target_map"] = "Unshuffle"
-                    # self._last_subtask.set_subtask(
-                    #     subtask_type="Goto",
-                    #     obj_type=self._last_to_interact_object_pose["type"],
-                    #     target_map="Unshuffle"
-                    # )
-                    if self.verbose:
-                        get_logger().info(
-                            f'      explore...'
-                        )
+                if not was_nav_action:
                     self._last_to_interact_object_pose = None
-                    self._last_subtask.set_subtask("Explore", None, None)
-
-        else:
-            # the first update, assign Explore subtask.
-            self._last_subtask.set_subtask(subtask_type="Explore", obj_type=None, target_map=None)
+        
+        held_object = task.unshuffle_env.held_object
+        if held_object is not None:
+            self._last_held_object_name = held_object["name"]
     
-        assert self._last_subtask.subtask_type is not None
+        # self._record_expert_subtask_and_generate_and_record_action(task)
+        self._generate_and_record_expert(task, action_taken, action_success)
 
-        if self.verbose:
-            get_logger().info(
-                f'      Planned Next Expert Subtask: {self._last_subtask}[{self._last_subtask.get_subtask_idx()}]'
-            )
-
-        self._record_expert_subtask_and_generate_and_record_action(task)
-
-    def _record_expert_subtask_and_generate_and_record_action(self, task: UnshuffleTask):
+    def _generate_and_record_expert(
+        self,
+        task: UnshuffleTask,
+        action_taken: Optional[int],
+        action_success: Optional[bool],
+    ):
         if task.num_steps_taken() == len(self.expert_subtask_list) + 1:
             get_logger().warning(
-                f"Already generated the expert action at step {task.num_steps_taken()}"
+                f"Already generated the expert subtask at step {task.num_steps_taken()}"
             )
             return
 
@@ -919,7 +501,7 @@ class OnePhaseSubtaskAndActionExpertSensor(AbstractExpertActionSensor):
                 f"Already generated the expert action at step {task.num_steps_taken()}"
             )
             return
-        
+
         assert task.num_steps_taken() == len(
             self.expert_subtask_list
         ), f"{task.num_steps_taken()} != {len(self.expert_subtask_list)}"
@@ -928,29 +510,17 @@ class OnePhaseSubtaskAndActionExpertSensor(AbstractExpertActionSensor):
             self.expert_action_list
         ), f"{task.num_steps_taken()} != {len(self.expert_action_list)}"
 
-        if self.verbose:
-            get_logger().info(
-                f'  ** IN _record_expert_subtask_and_generate_and_record_action() method'
-            )
-            get_logger().info(
-                f'    Generate expert action dict based on the updated current subtask...'
-            )
+        expert_dict = self._generate_expert(task)
 
-        expert_action_dict = self._generate_expert_action_dict(task)
-        
-        if self.verbose:
-            get_logger().info(
-                f'    Generated expert action: {expert_action_dict}'
-            )
         subtask_id = self._last_subtask.get_subtask_idx()   # include (None, None, None)
         if subtask_id is not None:
             assert 0 <= subtask_id < NUM_SUBTASKS
         self.expert_subtask_list.append(subtask_id)
 
-        action_str = stringcase.snakecase(expert_action_dict["action"])
+        action_str = stringcase.snakecase(expert_dict["action"])
         if action_str not in task.action_names():
             obj_type = stringcase.snakecase(
-                expert_action_dict["objectId"].split("|")[0]
+                expert_dict["objectId"].split("|")[0]
             )
             action_str = f"{action_str}_{obj_type}"
 
@@ -962,100 +532,90 @@ class OnePhaseSubtaskAndActionExpertSensor(AbstractExpertActionSensor):
             )
             self.expert_action_list.append(None)
 
-    def _generate_expert_action_dict(self, task: UnshuffleTask):
-
-        if task.env.mode != RearrangeMode.SNAP:
+    def _generate_expert(
+        self,
+        task: UnshuffleTask,
+        replan_subtask: bool = False,
+    ):
+        # Generate a dictionary describing the next expert subtask and expert action.
+        env = task.unshuffle_env
+        if env.mode != RearrangeMode.SNAP:
             raise NotImplementedError(
                 f"Expert only defined for 'easy' mode (current mode: {task.env.mode}"
             )
+
         if self.verbose:
             get_logger().info(
-                f'  ** IN _generate_expert_action_dict() method'
+                f'  ** IN _generate_expert() method'
             )
             get_logger().info(
-                f'    *** self._last_subtask: {self._last_subtask}'
+                f'    replan_subtask: {replan_subtask}'
+            )
+        # Generate expert subtask...
+        self._update_expert_subtask(task, replan_subtask)
+        if self.verbose:
+            get_logger().info(
+                f'    planned_subtask: {self._last_subtask}'
             )
 
-        held_object = task.env.held_object
-        if (
-            held_object is not None
-            and (
-                (
-                    self._last_to_interact_object_pose
-                    and self._last_to_interact_object_pose["name"] != held_object["name"]
-                )
-                or self._last_to_interact_object_pose is None
+        # Generate expert action...
+        expert_action_dict = self._generate_expert_action_dict(task)
+        if self.verbose:
+            get_logger().info(
+                f'    generated expert action dict: {expert_action_dict}'
             )
-        ):
-            if self.verbose:
-                get_logger().info(
-                    f'   The agent picked up different object...'
-                )
-            self._last_to_interact_object_pose = copy.deepcopy(held_object)
-            self._last_to_interact_object_pose["target_map"] = "Walkthrough"
-            for k in ["position", "rotation"]:
-                self._last_to_interact_object_pose[k] = task.env.obj_name_to_walkthrough_start_pose[
-                    held_object["name"]
-                ][k]
-            if self.verbose:
-                get_logger().info(
-                    f'      Re-plan the subtask to make agent go and put down the holding object...'
-                )
-            
-            if self.object_name_to_priority[self._last_to_interact_object_pose["name"]] <= self.max_priority_per_object:
+
+        return expert_action_dict
+
+    def _update_expert_subtask(
+        self,
+        task: UnshuffleTask,
+        replan_subtask: bool,
+    ):
+        env = task.unshuffle_env
+        last_expert_subtask = copy.deepcopy(self._last_subtask)
+        was_interact_subtask = last_expert_subtask.is_interact_subtask()
+
+        held_object = env.held_object
+        agent_loc = env.get_agent_location()
+
+        if self.verbose:
+            get_logger().info(
+                f'    ** IN _update_expert_subtask() method'
+            )
+            # get_logger().info(
+            #     f'      self._last_to_interact_object_pose: {self._last_to_interact_object_pose}'
+            # )
+
+        if not replan_subtask:
+            # self._generate_expert() is not repeated
+            if held_object is not None:
+                # Should go to the goal pose of the held object
                 if self.verbose:
                     get_logger().info(
-                        f"    It should go to the original place of the holding object..."
+                        f'      agent is holding object: {held_object["name"]}'
                     )
-                self._last_subtask.set_subtask("Goto", self._last_to_interact_object_pose["objectType"], self._last_to_interact_object_pose["target_map"])
+                self._last_to_interact_object_pose = copy.deepcopy(held_object)
+                self._last_to_interact_object_pose["target_map"] = "Walkthrough"
+                for k in ["position", "rotation"]:
+                    self._last_to_interact_object_pose[k] = task.env.obj_name_to_walkthrough_start_pose[
+                        held_object["name"]
+                    ][k]
+                self._last_subtask.set_subtask(
+                    subtask_type="Goto",
+                    obj_type=self._last_to_interact_object_pose["objectType"],
+                    target_map=self._last_to_interact_object_pose["target_map"],
+                )
+
             else:
-                if self.verbose:
-                    get_logger().info(
-                        f"    It FAILED to go to the original place of the holding object..."
-                    )
-                    get_logger().info(
-                        f"    Just drop the holding object and keep rearranging other objects..."
-                    )
-                # self._last_to_interact_object_pose = None
-                self._last_subtask.set_subtask("PutObject", self._last_to_interact_object_pose["objectType"], None)
-                return self._generate_expert_action_dict(task=task)
-            if self.verbose:
-                get_logger().info(
-                    f'    Planned Next Expert Subtask: {self._last_subtask}[{self._last_subtask.get_subtask_idx()}]'
-                )
+                _, goal_poses, cur_poses = env.poses
+                assert len(goal_poses) == len(cur_poses)
 
-        agent_loc = task.env.get_agent_location()
-        
-        if "Stop" in self._last_subtask.subtask_type:
-            if self.verbose:
-                get_logger().info(
-                    f'     returning action {"Done"}'
-                )
-            return dict(action="Done")
-        elif "Explore" in self._last_subtask.subtask_type:
-            _, goal_poses, cur_poses = task.env.poses
-            assert len(goal_poses) == len(cur_poses)
-            obj_pose_to_go_to = None
-            goal_obj_pos = None
-
-            if self._last_to_interact_object_pose is None:
-                if self.verbose:
-                    get_logger().info(
-                    f'  self._last_to_interact_object_pose is None.'
-                )
                 failed_places_and_min_dist = (float("inf"), float("inf"))
+                obj_pose_to_go_to = None
+                goal_obj_pos = None
+                # TODO: Explore task is ignored...
                 for gp, cp in zip(goal_poses, cur_poses):
-                    if self.verbose:
-                        if (
-                            (gp["broken"] == cp["broken"] == False)
-                            and not RearrangeTHOREnvironment.are_poses_equal(gp, cp)
-                        ):
-                            get_logger().info(
-                                f"        expert knows that {cp['name']} should be rearranged..."
-                            )
-                            get_logger().info(
-                                f"          self.object_name_to_priority[{cp['name']}] : {self.object_name_to_priority[cp['name']]}"
-                            )
                     if (
                         (gp["broken"] == cp["broken"] == False)
                         and self.object_name_to_priority[gp["name"]]
@@ -1069,36 +629,218 @@ class OnePhaseSubtaskAndActionExpertSensor(AbstractExpertActionSensor):
                                 agent_loc, gp["position"], ignore_y=True, l1_dist=True
                             ),
                         )
+                        if (
+                            self._last_to_interact_object_pose is not None
+                            and self._last_to_interact_object_pose["name"] == gp["name"]
+                        ):
+                            # Set distance to -1 for the currently targeted object
+                            if self.verbose:
+                                get_logger().info(
+                                    f'      Set distance to -1 for the currently targeted object'
+                                )
+                            priority_and_dist_to_object = (
+                                priority_and_dist_to_object[0],
+                                -1,
+                            )
+                        elif (
+                            gp["name"] in set(self.seen_obj_names_unshuffle) | set(self.seen_obj_names_walkthrough)
+                        ):
+                            if self.verbose:
+                                get_logger().info(
+                                    f'      set distance to -0.5 for the seen object {gp["name"]}'
+                                )
+                            priority_and_dist_to_object = (
+                                priority_and_dist_to_object[0],
+                                -0.5,
+                            )
 
                         if priority_and_dist_to_object < failed_places_and_min_dist:
                             failed_places_and_min_dist = priority_and_dist_to_object
                             obj_pose_to_go_to = cp
                             goal_obj_pos = gp
-
-                self._last_to_interact_object_pose = obj_pose_to_go_to
-                if obj_pose_to_go_to is not None:
-                    self._last_to_interact_object_pose["target_map"] = "Unshuffle"
+                
+                if self.verbose:
+                    get_logger().info(
+                        f'      obj_pose_to_go_to: {obj_pose_to_go_to}'
+                    )
+                if obj_pose_to_go_to is None:
                     if self.verbose:
                         get_logger().info(
-                            f"    EXPERT let the agent move to the object {self._last_to_interact_object_pose['name']}"
-                            f"    But the subtask is still {self._last_subtask}"
-                        )
-                else:
-                    # should stop episode
-                    if self.verbose:
-                        get_logger().info(
-                            f"    Should end this episode since there is no objects to handle..."
+                            f'      no items to rearrange...'
                         )
                     self._last_subtask.set_subtask("Stop", None, None)
-                    return self._generate_expert_action_dict(task=task)
+
+                elif not (
+                    set(self.seen_obj_names_unshuffle) | set(self.seen_obj_names_walkthrough)
+                ):
+                    if self.verbose:
+                        get_logger().info(
+                            f'      no seen items...'
+                        )
+                    self._last_to_interact_object_pose = obj_pose_to_go_to
+                    self._last_to_interact_object_pose["target_map"] = "Unshuffle"
+                    self._last_subtask.set_subtask("Explore", None, None)
+
+                else:
+                    if self.verbose:
+                        get_logger().info(
+                            f'      agent is moving to target: {obj_pose_to_go_to["name"]}'
+                        )
+                    self._last_to_interact_object_pose = obj_pose_to_go_to
+                    self._last_to_interact_object_pose["target_map"] = "Unshuffle"
+                    self._last_subtask.set_subtask(
+                        subtask_type="Goto",
+                        obj_type=self._last_to_interact_object_pose["type"],
+                        target_map=self._last_to_interact_object_pose["target_map"],
+                    )
+        else:
+            """
+            self._generate_expert() is called by self._generate_expert_action_dict()
+            since the Goto subtask is done.
+            """
+            if self.verbose:
+                get_logger().info(
+                    f'      Replanning Subtask...'
+                )
+            if held_object is not None:
+                self._last_subtask.set_subtask(
+                    subtask_type="PutObject",
+                    obj_type=self._last_to_interact_object_pose["objectType"],
+                    target_map=None,
+                )
+
+            else:
+                _, goal_poses, cur_poses = task.env.poses
+                assert len(goal_poses) == len(cur_poses)
+                obj_pose_to_go_to = None
+                goal_obj_pos = None
+                for gp, cp in zip(goal_poses, cur_poses):
+                    if (
+                        self._last_to_interact_object_pose is not None
+                        and self._last_to_interact_object_pose["name"] == gp["name"]
+                    ):
+                        obj_pose_to_go_to = cp
+                        goal_obj_pos = gp
+                
+                assert obj_pose_to_go_to is not None
+                if (
+                    obj_pose_to_go_to["openness"] is not None
+                    and obj_pose_to_go_to["openness"] != goal_obj_pos["openness"]
+                ):
+                    self._last_subtask.set_subtask(
+                        subtask_type="OpenObject",
+                        obj_type=obj_pose_to_go_to["type"],
+                        target_map=None,
+                    )
+                elif obj_pose_to_go_to["pickupable"]:
+                    self._last_subtask.set_subtask(
+                        subtask_type="PickupObject",
+                        obj_type=obj_pose_to_go_to["type"],
+                        target_map=None,
+                    )
+                else:
+                    self.object_name_to_priority[goal_obj_pos["name"]] = (
+                        self.max_priority_per_object + 1
+                    )
+                    # TODO: Explore?
+                    self._generate_expert(task=task)
+
+    def _generate_expert_action_dict(self, task: UnshuffleTask):
+        if self.verbose:
+            get_logger().info(
+                f'    ** IN _generate_expert_action_dict() method'
+            )
+        if task.env.mode != RearrangeMode.SNAP:
+            raise NotImplementedError(
+                f"Expert only defined for 'easy' mode (current mode: {task.env.mode}"
+            )
+
+        if "Stop" in self._last_subtask.subtask_type:
+            if self.verbose:
+                get_logger().info(
+                    f'      All subtasks done'
+                )
+            return dict(action="Done")
+
+        elif "Explore" in self._last_subtask.subtask_type:
+            # TODO: to be updated
+            if self.verbose:
+                get_logger().info(
+                    f'      Explore to find difference'
+                )
+            # import pdb; pdb.set_trace()
+            assert self._last_to_interact_object_pose is not None
+            # expert_nav_action = self._expert_nav_action_to_obj(
+            #     task=task,
+            #     obj=self._last_to_interact_object_pose
+            # )
+            # pass
         
-        # elif "Goto" in self._last_subtask.subtask_type:
-        #     pass
-        
+        elif "Goto" in self._last_subtask.subtask_type:
+            assert (
+                self._last_to_interact_object_pose is not None
+                and 'target_map' in self._last_to_interact_object_pose
+            ), f"self._last_subtask: {self._last_subtask} | self._last_to_interact_object_pose: {self._last_to_interact_object_pose}"
+            if self.verbose:
+                get_logger().info(
+                    f'      Goto {self._last_to_interact_object_pose["name"]}...'
+                )
+
+            # expert_nav_action = self._expert_nav_action_to_obj(
+            #     task=task,
+            #     obj=self._last_to_interact_object_pose
+            # )
+            # if self.verbose:
+            #     get_logger().info(
+            #         f'      Generated expert navigation action is {expert_nav_action}'
+            #     )
+            # if expert_nav_action is None:
+            #     interactable_positions = task.env._interactable_positions_cache.get(
+            #         scene_name=task.env.scene,
+            #         obj=self._last_to_interact_object_pose,
+            #         controller=task.env.controller,
+            #     )
+            #     self.object_name_to_priority[self._last_to_interact_object_pose["name"]] += 1
+            #     # self._last_subtask.set_subtask("Explore", None, None)
+            #     # self._last_to_interact_object_pose = None
+            #     if self.verbose:
+            #         get_logger().info(
+            #             f'      Re-generate expert subtask and action...'
+            #         )
+            #     return self._generate_expert(task=task, replan_subtask=True)
+            
+            # elif expert_nav_action == "Pass":
+            #     with include_object_data(task.env.controller):
+            #         visible_objects = {
+            #             o["name"]
+            #             for o in task.env.last_event.metadata["objects"]
+            #             if o["visible"]
+            #         }
+                
+            #     if self._last_to_interact_object_pose["name"] not in visible_objects:
+            #         if self._invalidate_interactable_loc_for_pose(
+            #             location=task.env.get_agent_location(), obj_pose=self._last_to_interact_object_pose
+            #         ):
+            #             return self._generate_expert(task=task, replan_subtask=True)
+                    
+            #         raise RuntimeError("This should not be possible.")
+
+            #     if self.verbose:
+            #         get_logger().info(
+            #             f'      Goto {self._last_to_interact_object_pose["name"]} is done.'
+            #         )
+            #         get_logger().info(
+            #             f'      Re-plan expert subtask to step forward'
+            #         )
+            #     return self._generate_expert(task=task, replan_subtask=True)
+
+            # else:
+            #     return dict(action=expert_nav_action)
+
         elif "PickupObject" in self._last_subtask.subtask_type:
             if self.verbose:
                 get_logger().info(
-                    f'     returning action {"Pickup"} | objectName {self._last_to_interact_object_pose["name"]} | objectId {self._last_to_interact_object_pose["objectId"]}'
+                    f'      PickupObject Subtask...'
                 )
             return dict(
                 action="Pickup",
@@ -1107,7 +849,7 @@ class OnePhaseSubtaskAndActionExpertSensor(AbstractExpertActionSensor):
         elif "OpenObject" in self._last_subtask.subtask_type:
             if self.verbose:
                 get_logger().info(
-                    f'     returning action {"OpenObject"} | objectName {self._last_to_interact_object_pose["name"]} | objectId {self._last_to_interact_object_pose["objectId"]}'
+                    f'      OpenObject Subtask...'
                 )
             return dict(
                 action="OpenByType",
@@ -1119,150 +861,64 @@ class OnePhaseSubtaskAndActionExpertSensor(AbstractExpertActionSensor):
         elif "PutObject" in self._last_subtask.subtask_type:
             if self.verbose:
                 get_logger().info(
-                    f'     returning action {"DropHeldObjectWithSnap"} | objectName {self._last_to_interact_object_pose["name"]} | objectId {self._last_to_interact_object_pose["objectId"]}'
+                    f'      PutObject Subtask...'
                 )
             return dict(action="DropHeldObjectWithSnap")
-
-        assert (
-            self._last_to_interact_object_pose is not None
-            and 'target_map' in self._last_to_interact_object_pose
-        ), f"self._last_subtask: {self._last_subtask} | self._last_to_interact_object_pose: {self._last_to_interact_object_pose}"
         
+        else:
+            raise RuntimeError("??????????????????????")
+
+        expert_nav_action = self._expert_nav_action_to_obj(
+            task=task,
+            obj=self._last_to_interact_object_pose
+        )
         if self.verbose:
             get_logger().info(
-                f'    Generating expert navigation action to the object {self._last_to_interact_object_pose["name"]} in {self._last_to_interact_object_pose["target_map"]}, position: {self._last_to_interact_object_pose["position"]}, rotation: {self._last_to_interact_object_pose["rotation"]}'
+                f'      Generated expert navigation action is {expert_nav_action}'
             )
-            if self._last_to_interact_object_pose["target_map"] == "Walkthrough":
-                get_logger().info(
-                    f'      The position and rotation of the target object place in the Walkthrough Environment: {task.env.obj_name_to_walkthrough_start_pose[self._last_to_interact_object_pose["name"]]}'
-                )
-            else:
-                _, _, cur_poses = task.env.poses
-                target = next(
-                    (
-                        cp for cp in cur_poses
-                        if cp["name"] == self._last_to_interact_object_pose["name"]
-                    ),
-                    None
-                )
-                assert target is not None
-                get_logger().info(
-                    f'      The position and rotation of the target object place in the Unshuffle Environment: {target}'
-                )
-        expert_nav_action = self._expert_nav_action_to_obj(task=task, obj=self._last_to_interact_object_pose)
         if expert_nav_action is None:
-            if self.verbose:
-                get_logger().info(
-                    f'        Generated navigation action is None...'
-                )
             interactable_positions = task.env._interactable_positions_cache.get(
                 scene_name=task.env.scene,
                 obj=self._last_to_interact_object_pose,
                 controller=task.env.controller,
             )
-            if len(interactable_positions) != 0:
-                # Could not find a path to the object, increment the place count of the object and
-                # try generating a new action.
-                if self.verbose:
-                    get_logger().debug(
-                        f"Could not find a path to {self._last_to_interact_object_pose}"
-                        f" in scene {task.unshuffle_env.scene}"
-                        f" when at position {task.unshuffle_env.get_agent_location()}."
-                    )
-            else:
-                if self.verbose:
-                    get_logger().debug(
-                        f"Object {self._last_to_interact_object_pose} in scene {task.unshuffle_env.scene}"
-                        f" has no interactable positions."
-                    )
+            self.object_name_to_priority[self._last_to_interact_object_pose["name"]] += 1
+            # self._last_subtask.set_subtask("Explore", None, None)
+            # self._last_to_interact_object_pose = None
             if self.verbose:
                 get_logger().info(
-                    f'        interactable_positions: {interactable_positions}'
+                    f'      Re-generate expert subtask and action...'
                 )
-                get_logger().info(
-                    f'        Let the agent Explore...'
-                )
-            self.object_name_to_priority[self._last_to_interact_object_pose["name"]] += 1
-            self._last_subtask.set_subtask("Explore", None, None)
-            self._last_to_interact_object_pose = None
-            return self._generate_expert_action_dict(task=task)
+            return self._generate_expert(task=task, replan_subtask=True)
         
         elif expert_nav_action == "Pass":
-            if self.verbose:
-                get_logger().info(
-                    f'        Generated navigation action is "Pass"'
-                )
-            # with include_object_data(task.env.controller):
-            #     visible_objects = {
-            #         o["name"]
-            #         for o in task.env.last_event.metadata["objects"]
-            #         if o["visible"]
-            #     }
-            visible_objects = self.get_object_names_from_current_view(
-                task=task,
-                env_type=self._last_to_interact_object_pose["target_map"],
-                rearrange_targets=self._objects_to_rearrange,
-            )
-
+            with include_object_data(task.env.controller):
+                visible_objects = {
+                    o["name"]
+                    for o in task.env.last_event.metadata["objects"]
+                    if o["visible"]
+                }
+            
             if self._last_to_interact_object_pose["name"] not in visible_objects:
-                if self.verbose:
-                    get_logger().info(
-                        f'        But the agent cannot find the object in the current view!!!'
-                    )
                 if self._invalidate_interactable_loc_for_pose(
-                    env=task.env,
-                    location=agent_loc, 
+                    env=task.unshuffle_env,
+                    location=task.env.get_agent_location(),
                     obj_pose=self._last_to_interact_object_pose
                 ):
-                    # self._last_subtask = None
-                    # self._last_to_interact_object_pose = None
-                    # return self._generate_expert_subtask_dict(task=task)
-                    if self.verbose:
-                        get_logger().info(
-                            f'        Invalidate the current agent position and keep navigating to the object {self._last_to_interact_object_pose["name"]}'
-                        )
-                    return self._generate_expert_action_dict(task=task)
-
+                    return self._generate_expert(task=task, replan_subtask=True)
+                
                 raise RuntimeError("This should not be possible.")
 
-            else:
-                if self.verbose:
-                    get_logger().info(
-                        f'        The target object is visible'
-                    )
-                    get_logger().info(
-                        f'        Do next subtask...'
-                    )
-                # The agent has arrived to the target object.
-                if self._last_subtask.subtask_type == "Explore":
-                    obj_type = (
-                        self._last_to_interact_object_pose["type"] 
-                        if "type" in self._last_to_interact_object_pose 
-                        else self._last_to_interact_object_pose["objectType"]
-                    )
-                    self._last_subtask.next_subtask(
-                        obj_type=obj_type,
-                        target_map="Unshuffle"
-                    )
-
-                elif self._last_subtask.subtask_type == "Goto":
-                    self._last_subtask.next_subtask(held_object=held_object)
-                
-                else:
-                    raise NotImplementedError(f"what?")
-
-                if self.verbose:
-                    get_logger().info(
-                        f'      Planned Next Expert Subtask: {self._last_subtask}[{self._last_subtask.get_subtask_idx()}]'
-                    )
-                    
-                return self._generate_expert_action_dict(task=task)
-        
-        else:
             if self.verbose:
                 get_logger().info(
-                    f'     returning action {expert_nav_action} | objectName {self._last_to_interact_object_pose["name"]} | objectId {self._last_to_interact_object_pose["objectId"]}'
+                    f'      Goto {self._last_to_interact_object_pose["name"]} is done.'
                 )
+                get_logger().info(
+                    f'      Re-plan expert subtask to step forward'
+                )
+            return self._generate_expert(task=task, replan_subtask=True)
+
+        else:
             return dict(action=expert_nav_action)
 
     def _expert_nav_action_to_obj(self, task: UnshuffleTask, obj: Dict[str, Any]) -> Optional[str]:
