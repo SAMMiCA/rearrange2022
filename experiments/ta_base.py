@@ -11,7 +11,7 @@ from torch import nn, cuda, optim
 import torchvision
 
 from allenact.base_abstractions.sensor import Sensor, SensorSuite
-from allenact.base_abstractions.preprocessor import SensorPreprocessorGraph
+from allenact.base_abstractions.preprocessor import Preprocessor, SensorPreprocessorGraph
 from allenact.base_abstractions.experiment_config import (
     MachineParams,
     split_processes_onto_devices,
@@ -51,11 +51,12 @@ class TaskAwareBaseExperimentConfig(RearrangeBaseExperimentConfig):
     INVENTORY_UUID = "inventory"
     SEMANTIC_MAP_UUID = "semmap"
     UNSHUFFLED_SEMANTIC_MAP_UUID = "unshuffled_semmap"
-    SUBTASK_EXPERT_UUID = "subtask_expert"
 
     # Model parameters
-    IS_WALKTHROUGH_PHASE_EMBEDING_DIM: int = 32
+    PREV_ACTION_EMBEDDING_DIM: int = 32
     RNN_TYPE: str = "LSTM"
+    NUM_RNN_LAYERS: int = 1
+    HIDDEN_SIZE: int = 512
 
     RGB_NORMALIZATION = False
     DEPTH_NORMALIZATION = False
@@ -211,16 +212,9 @@ class TaskAwareBaseExperimentConfig(RearrangeBaseExperimentConfig):
         else:
             raise NotImplementedError
         
-
     @classmethod
-    def create_preprocessor_graph(cls, mode: str) -> SensorPreprocessorGraph:
+    def preprocessors(cls) -> Sequence[Preprocessor]:
         preprocessors = []
-        additional_output_uuids = []
-
-        if not cls.REFERENCE_SEGMENTATION:
-            # TODO: Implement Segmentation Inference Model
-            pass
-
         if cls.CNN_PREPROCESSOR_TYPE_AND_PRETRAINING is not None:
             preprocessors.append(
                 cls.create_resnet_bulder(
@@ -234,15 +228,21 @@ class TaskAwareBaseExperimentConfig(RearrangeBaseExperimentConfig):
                     out_uuid=cls.UNSHUFFLED_RGB_RESNET_UUID,
                 )
             )
+        
+        return preprocessors
+
+    @classmethod
+    def create_preprocessor_graph(cls, mode: str) -> SensorPreprocessorGraph:
+        additional_output_uuids = []
 
         return (
             None
-            if len(preprocessors) == 0
+            if len(cls.preprocessors()) == 0
             else Builder(
                 SensorPreprocessorGraph,
                 {
                     "source_observation_spaces": SensorSuite(cls.sensors()).observation_spaces,
-                    "preprocessors": preprocessors,
+                    "preprocessors": cls.preprocessors(),
                     "additional_output_uuids": additional_output_uuids,
                 }
             )

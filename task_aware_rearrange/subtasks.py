@@ -1,6 +1,7 @@
+import enum
 from typing import Dict, Union, Optional
 import stringcase
-from task_aware_rearrange.constants import IDX_TO_OBJECT_TYPE, OBJECT_TYPE_TO_IDX, PICKUPABLE_OBJECTS, OPENABLE_OBJECTS
+from task_aware_rearrange.constants import IDX_TO_OBJECT_TYPE, OBJECT_TYPE_TO_IDX, PICKUPABLE_OBJECTS, OPENABLE_OBJECTS, UNKNOWN_OBJECT_STR
 
 """
 Subtasks
@@ -93,6 +94,30 @@ SUBTASK_TYPE_TO_SUBTASKS = {
     "Stop": SUBTASKS_STOP,
 }
 NUM_SUBTASKS = len(SUBTASKS)
+
+SUBTASK_TARGET_OBJECTS = (
+    (UNKNOWN_OBJECT_STR,)
+    + tuple(
+        f"{pickupable}_{target_map}"
+        for target_map in MAP_TYPES
+        for pickupable in PICKUPABLE_OBJECTS
+    ) + tuple(
+        f"{openable}_Unshuffle"
+        for openable in OPENABLE_OBJECTS
+    )
+)
+IDX_TO_SUBTASK_TARGET_OBJECT = {i: target_object for i, target_object in enumerate(SUBTASK_TARGET_OBJECTS)}
+SUBTASK_TARGET_OBJECT_TO_IDX = {v: k for k, v in IDX_TO_SUBTASK_TARGET_OBJECT.items()}
+
+SUBTASK_TARGET_OBJECT_TO_OBJECT_TYPE = {
+    target_object: target_object.split('_')[0] 
+    for target_object in SUBTASK_TARGET_OBJECTS
+}
+SUBTASK_TARGET_OBJECT_TO_OBJECT_TYPE_IDX = {
+    target_object: OBJECT_TYPE_TO_IDX[target_object.split('_')[0]]
+    for target_object in SUBTASK_TARGET_OBJECTS
+}
+NUM_SUBTASK_TARGET_OBJECTS = len(SUBTASK_TARGET_OBJECTS)
 
 
 class Subtask:

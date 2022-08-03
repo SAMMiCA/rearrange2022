@@ -1,8 +1,11 @@
 from typing import Sequence
+import sys
 import platform
 import os
 import glob
 import Xlib
+import pdb
+
 
 def get_open_x_displays(throw_error_if_empty: bool = False) -> Sequence[str]:
     assert platform.system() == "Linux", "Can only get X-displays for Linux systems."
@@ -33,3 +36,18 @@ def get_open_x_displays(throw_error_if_empty: bool = False) -> Sequence[str]:
         )
 
     return displays
+
+
+class ForkedPdb(pdb.Pdb):
+    """A Pdb subclass that may be used
+    from a forked multiprocessing child
+
+    """
+    def interaction(self, *args, **kwargs):
+        _stdin = sys.stdin
+        try:
+            sys.stdin = open('/dev/stdin')
+            pdb.Pdb.interaction(self, *args, **kwargs)
+        finally:
+            sys.stdin = _stdin
+            

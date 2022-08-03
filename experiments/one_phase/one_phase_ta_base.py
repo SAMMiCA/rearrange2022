@@ -1,28 +1,14 @@
 from typing import Tuple, Sequence, Optional, Dict, Any, Type, List
-import gym
-from torch import nn, cuda, optim
 
 from allenact.base_abstractions.sensor import Sensor, SensorSuite
 from allenact.embodiedai.sensors.vision_sensors import DepthSensor
 
 from rearrange.tasks import RearrangeTaskSampler
 from experiments.ta_base import TaskAwareBaseExperimentConfig
-from task_aware_rearrange.models import OnePhaseResNetActorCriticRNN
 
 
 class OnePhaseTaskAwareRearrangeBaseExperimentConfig(TaskAwareBaseExperimentConfig):
     
-    @classmethod
-    def create_model(cls, **kwargs) -> nn.Module:
-        return OnePhaseResNetActorCriticRNN(
-            action_space=gym.spaces.Discrete(len(cls.actions())),
-            observation_space=kwargs["sensor_preprocessor_graph"].observation_spaces,
-            rgb_uuid=cls.EGOCENTRIC_RGB_UUID if cls.CNN_PREPROCESSOR_TYPE_AND_PRETRAINING is None else cls.EGOCENTRIC_RGB_RESNET_UUID,
-            unshuffled_rgb_uuid=cls.UNSHUFFLED_RGB_UUID if cls.CNN_PREPROCESSOR_TYPE_AND_PRETRAINING is None else cls.UNSHUFFLED_RGB_RESNET_UUID,
-            rnn_type=cls.RNN_TYPE,
-            done_action_index=cls.actions().index("done"),
-        )
-
     @classmethod
     def make_sampler_fn(
         cls,
