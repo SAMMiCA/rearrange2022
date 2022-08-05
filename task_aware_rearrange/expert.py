@@ -726,6 +726,7 @@ class OnePhaseSubtaskAndActionExpertSensor(AbstractExpertActionSensor):
                 if (
                     obj_pose_to_go_to["openness"] is not None
                     and obj_pose_to_go_to["openness"] != goal_obj_pos["openness"]
+                    and obj_pose_to_go_to["type"] in OPENABLE_OBJECTS
                 ):
                     self._last_subtask.set_subtask(
                         subtask_type="OpenObject",
