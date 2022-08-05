@@ -621,6 +621,7 @@ class OnePhaseSubtaskAndActionExpertSensor(AbstractExpertActionSensor):
                         and self.object_name_to_priority[gp["name"]]
                         <= self.max_priority_per_object
                         and not RearrangeTHOREnvironment.are_poses_equal(gp, cp)
+                        and cp["type"] in (OPENABLE_OBJECTS + PICKUPABLE_OBJECTS)
                     ):
                         priority = self.object_name_to_priority[gp["name"]]
                         priority_and_dist_to_object = (
