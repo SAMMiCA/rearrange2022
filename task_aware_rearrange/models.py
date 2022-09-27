@@ -759,7 +759,7 @@ class OnePhaseTaskAwareActorCriticRNN(OnePhaseSemanticMappingWithInventoryActorC
         # State encoder for navigation and interaction
         self.state_encoder = RNNStateEncoder(
             input_size=(
-                self._hidden_size * 2
+                self._hidden_size * 3
                 + self.prev_action_embedding_dim  
             ),
             hidden_size=self._hidden_size,
@@ -963,6 +963,7 @@ class OnePhaseTaskAwareActorCriticRNN(OnePhaseSemanticMappingWithInventoryActorC
                 (
                     obs_for_rnn[step],
                     sem_map_inv_embedding,
+                    subtask_history_embeddings[step],
                 ),
                 dim=-1
             ).unsqueeze(0)
