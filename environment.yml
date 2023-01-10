@@ -1,4 +1,4 @@
-name: thor-rearrange
+name: thor-rearrange2022
 channels:
   - defaults
   - pytorch
@@ -45,4 +45,4 @@ dependencies:
     - pycocotools
     - kornia
     - transforms3d
-prefix: /anaconda3/envs/thor-rearrange
+prefix: /anaconda3/envs/thor-rearrange2022

@@ -62,7 +62,7 @@ class ExpertTestExpConfig(RearrangeBaseExperimentConfig):
         "renderSemanticSegmentation": REFERENCE_SEGMENTATION,
         "renderInstanceSegmentation": REFERENCE_SEGMENTATION,
     }
-    HEADLESS = False
+    HEADLESS = True
 
     @classmethod
     def sensors(cls) -> Sequence[Sensor]:

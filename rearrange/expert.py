@@ -627,7 +627,7 @@ class GreedyUnshuffleExpert:
             if expert_nav_action is None:
                 # Could not find a path to the target, let's just immediately drop the held object
                 return dict(action="DropHeldObjectWithSnap")
-            elif expert_nav_action is "Pass":
+            elif expert_nav_action == "Pass":
                 # We are in a position where we can drop the object, let's do that
                 return dict(action="DropHeldObjectWithSnap")
             else:

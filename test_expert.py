@@ -1,3 +1,5 @@
+import argparse
+import numpy as np
 import matplotlib.pyplot as plt
 
 from allenact.utils.misc_utils import NumpyJSONEncoder
@@ -11,9 +13,22 @@ from experiments.test_exp import ExpertTestExpConfig
 from task_aware_rearrange.subtasks import IDX_TO_SUBTASK
 
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('--stage', type=str, default="train")
+    parser.add_argument('--visualize', action='store_true', )
+
+    args = parser.parse_args()
+
+    return args
+
+
 if __name__ == "__main__":
     # init_logging("info")
-    visualize = False
+    args = parse_args()
+    stage = args.stage
+    visualize = args.visualize
     
     # # simple metric
     # simple_metrics = dict(
@@ -33,7 +48,7 @@ if __name__ == "__main__":
     # )
 
     task_sampler_params = ExpertTestExpConfig.stagewise_task_sampler_args(
-        stage="combined", process_ind=0, total_processes=1, devices=[0]
+        stage=stage, process_ind=0, total_processes=1, devices=[0]
     )
     task_sampler_params['thor_controller_kwargs'].update(ExpertTestExpConfig.THOR_CONTROLLER_KWARGS)
     one_phase_rgb_task_sampler: RearrangeTaskSampler = (
@@ -74,6 +89,14 @@ if __name__ == "__main__":
         )
         # if i_task < 5:
         #     continue
+        # num_openable_data = len(unshuffle_task.env.current_task_spec.openable_data)
+        # num_start_misplaced = (unshuffle_task.start_energies > 0.0).sum()
+        # start_misplaced_inds = unshuffle_task.start_energies.nonzero()[0]
+        # obj_names = list(unshuffle_task.env.obj_name_to_walkthrough_start_pose.keys())
+        # start_misplaced_obj_names = np.take(
+        #     obj_names, start_misplaced_inds
+        # ).tolist()
+        # import pdb; pdb.set_trace()
 
         observations = unshuffle_task.get_observations()
         while not unshuffle_task.is_done():
@@ -118,12 +141,19 @@ if __name__ == "__main__":
         task_info = metrics["task_info"]
         del metrics["task_info"]
         my_leaderboard_submission[task_info["unique_id"]] = {**task_info, **metrics}
+        # import pdb; pdb.set_trace()
+        # ips, gps, cps = unshuffle_task.env.poses
+        # end_energies = unshuffle_task.env.pose_difference_energy(gps, cps)
+        # end_misplaced_inds = end_energies.nonzero()[0]
+        # end_misplaced_obj_names = np.take(
+        #     obj_names, end_misplaced_inds
+        # ).tolist()
         
     import json
     import gzip
     import os
 
-    save_path = "./test_subtask_submission_combined.json.gz"
+    save_path = f"./subtask_expert_res_{stage}.json.gz"
     if os.path.exists(os.path.dirname(save_path)):
         print(f"Saving example submission file to {save_path}")
         submission_json_str = json.dumps(my_leaderboard_submission, cls=NumpyJSONEncoder)
