@@ -1,10 +1,11 @@
 import argparse
+import torch
 import numpy as np
 import matplotlib.pyplot as plt
 
 from allenact.utils.misc_utils import NumpyJSONEncoder
 from allenact.utils.system import get_logger, init_logging, _new_logger
-
+from allenact.utils.tensor_utils import batch_observations
 from baseline_configs.one_phase.one_phase_rgb_base import (
     OnePhaseRGBBaseExperimentConfig,
 )
@@ -56,6 +57,17 @@ if __name__ == "__main__":
             **task_sampler_params, force_cache_reset=False, epochs=1,
         )
     )
+    sensor_preprocessor_graph = ExpertTestExpConfig.create_preprocessor_graph(mode="train")().to(
+        torch.device(0)
+    )
+    agent_model = ExpertTestExpConfig.create_model(**{"sensor_preprocessor_graph": sensor_preprocessor_graph}).to(
+        torch.device(0)
+    )
+    # RolloutStorages
+    training_pipeline = ExpertTestExpConfig.training_pipeline()
+    rollout_storage = training_pipeline.rollout_storage
+    uuid_to_storage = training_pipeline.current_stage_storage
+    recurrent_memory_specification = agent_model.recurrent_memory_specification
 
     how_many_unique_datapoints = one_phase_rgb_task_sampler.total_unique
     num_tasks_to_do = how_many_unique_datapoints
@@ -87,18 +99,68 @@ if __name__ == "__main__":
             f" '{one_phase_rgb_task_sampler.current_task_spec.stage}' stage and has"
             f" unique id '{one_phase_rgb_task_sampler.current_task_spec.unique_id}'"
         )
-        # if i_task < 5:
-        #     continue
-        # num_openable_data = len(unshuffle_task.env.current_task_spec.openable_data)
-        # num_start_misplaced = (unshuffle_task.start_energies > 0.0).sum()
-        # start_misplaced_inds = unshuffle_task.start_energies.nonzero()[0]
-        # obj_names = list(unshuffle_task.env.obj_name_to_walkthrough_start_pose.keys())
-        # start_misplaced_obj_names = np.take(
-        #     obj_names, start_misplaced_inds
-        # ).tolist()
-        # import pdb; pdb.set_trace()
 
+        print(f"Observations from Environments")
         observations = unshuffle_task.get_observations()
+        # for k, v in observations.items():
+        #     if not isinstance(v, dict):
+        #         print(
+        #             f'KEY [{k}] | TYPE [{type(v)}] | SHAPE [{v.shape if hasattr(v, "shape") else None}]'
+        #             + (f' | DEVICE [{v.device}]' if hasattr(v, "device") else '')
+        #         )
+        #     else:
+        #         print(f'KEY [{k}] | TYPE [{type(v)}]')
+        #         for k1, v1 in v.items():
+        #             print(
+        #                 f'    KEY [{k1}] | TYPE [{type(v1)}] | SHAPE [{v1.shape if hasattr(v1, "shape") else None}]'
+        #                 + (f' | DEVICE [{v.device}]' if hasattr(v, "device") else '')
+        #             )
+
+        print(f"BATCHED Observations")
+        batch = batch_observations([observations], device=torch.device(0))
+        # for k, v in batch.items():
+        #     if not isinstance(v, dict):
+        #         print(
+        #             f'KEY [{k}] | TYPE [{type(v)}] | SHAPE [{v.shape if hasattr(v, "shape") else None}]'
+        #             + (f' | DEVICE [{v.device}]' if hasattr(v, "device") else '')
+        #         )
+        #     else:
+        #         print(f'KEY [{k}] | TYPE [{type(v)}]')
+        #         for k1, v1 in v.items():
+        #             print(
+        #                 f'    KEY [{k1}] | TYPE [{type(v1)}] | SHAPE [{v1.shape if hasattr(v1, "shape") else None}]'
+        #                 + (f' | DEVICE [{v.device}]' if hasattr(v, "device") else '')
+        #             )
+        
+        print(f"PREPROCESSED Observations")
+        preprocessed_obs = sensor_preprocessor_graph.get_observations(batch)
+        # for k, v in preprocessed_obs.items():
+        #     if not isinstance(v, dict):
+        #         print(
+        #             f'KEY [{k}] | TYPE [{type(v)}] | SHAPE [{v.shape if hasattr(v, "shape") else None}]'
+        #             + (f' | DEVICE [{v.device}]' if hasattr(v, "device") else '')
+        #         )
+        #     else:
+        #         print(f'KEY [{k}] | TYPE [{type(v)}]')
+        #         for k1, v1 in v.items():
+        #             print(
+        #                 f'    KEY [{k1}] | TYPE [{type(v1)}] | SHAPE [{v1.shape if hasattr(v1, "shape") else None}]'
+        #                 + (f' | DEVICE [{v.device}]' if hasattr(v, "device") else '')
+        #             )
+
+        rollout_storage.to(torch.device(0))
+        rollout_storage.set_partition(index=0, num_parts=1)
+        rollout_storage.initialize(
+            observations=preprocessed_obs,
+            num_samplers=1,
+            recurrent_memory_specification=recurrent_memory_specification,
+            action_space=agent_model.action_space,
+        )
+
+        agent_input = rollout_storage.agent_input_for_next_step()
+        ac_out, memory = agent_model(**agent_input)
+
+        import pdb; pdb.set_trace()
         while not unshuffle_task.is_done():
             esa = observations[ExpertTestExpConfig.EXPERT_SUBTASK_ACTION_UUID]
             raw_rgb = observations[ExpertTestExpConfig.EGOCENTRIC_RAW_RGB_UUID]
@@ -136,18 +198,10 @@ if __name__ == "__main__":
         metrics = unshuffle_task.metrics()
         metrics["task_info"]["unshuffle_subtasks"] = task_subtasks
         print(f"Both phases complete, metrics: '{metrics}'")
-        # import pdb; pdb.set_trace()
 
         task_info = metrics["task_info"]
         del metrics["task_info"]
         my_leaderboard_submission[task_info["unique_id"]] = {**task_info, **metrics}
-        # import pdb; pdb.set_trace()
-        # ips, gps, cps = unshuffle_task.env.poses
-        # end_energies = unshuffle_task.env.pose_difference_energy(gps, cps)
-        # end_misplaced_inds = end_energies.nonzero()[0]
-        # end_misplaced_obj_names = np.take(
-        #     obj_names, end_misplaced_inds
-        # ).tolist()
         
     import json
     import gzip

@@ -538,6 +538,7 @@ if __name__ == "__main__":
                         unshuffle_semmap.append(acc_unshuffle_semmap)
                         walkthrough_semmap.append(acc_walkthrough_semmap)
 
+                    import pdb; pdb.set_trace()
                     unshuffle_semmap = torch.stack(unshuffle_semmap)
                     walkthrough_semmap = torch.stack(walkthrough_semmap)
                     # import pdb; pdb.set_trace()
@@ -601,8 +602,9 @@ if __name__ == "__main__":
         with tqdm(val_data_loader, unit=" batch") as vepoch:
             vepoch.set_description_str(f'Epoch {epoch + 1}]')
             prev_actions = torch.zeros((args.batch_size + 1)).long()
-            acc_unshuffle_semmap.zero_()
-            acc_walkthrough_semmap.zero_()
+            if args.semmap:
+                acc_unshuffle_semmap.zero_()
+                acc_walkthrough_semmap.zero_()
             with torch.no_grad():
                 for vbatch, worker_id in vepoch:
                     vepoch_batch += 1

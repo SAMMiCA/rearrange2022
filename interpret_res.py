@@ -44,6 +44,7 @@ def stagewise(path, stage = None):
     if stage is not None:
         print(f"stage: {stage}")
     print(averages)
+    import pdb; pdb.set_trace()
 
 
 def main():
