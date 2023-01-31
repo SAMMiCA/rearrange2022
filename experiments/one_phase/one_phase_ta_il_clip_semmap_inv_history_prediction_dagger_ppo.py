@@ -22,6 +22,7 @@ class OnePhaseTaskAwareRearrangeILClipSemmapWithInvSubtasHistorySubtaskPredictio
     IL_PIPELINE_TYPE: Optional[str] = "4proc"
     TRAINING_STEPS = int(25e6)
     SAVE_INTERVAL = int(2e5)
+    REQUIRE_SEMANTIC_SEGMENTATION = True
     REFERENCE_SEGMENTATION = True
     HEADLESS = True
 

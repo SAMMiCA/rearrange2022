@@ -15,6 +15,7 @@ from task_aware_rearrange.voxel_utils import GridParameters
 class OnePhaseTaskAwareRearrangeClipSemmapPPOExperimentConfig(OnePhaseTaskAwareRearrangeClipPPOExperimentConfig):
 
     CNN_PREPROCESSOR_TYPE_AND_PRETRAINING = ("RN50", "clip")
+    REQUIRE_SEMANTIC_SEGMENTATION = True
     REFERENCE_SEGMENTATION = True
     HEADLESS = True
     

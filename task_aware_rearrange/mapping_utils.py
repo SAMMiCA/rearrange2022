@@ -10,6 +10,13 @@ def update_semantic_map(
     sem_map_prev [nsampler, nchannels, width, length, height]
     map_mask  [nsampler, 1, 1, 1, 1]: map_masks[step]
     """
+    if len(sem_map.shape) == 4:
+        assert len(sem_map_prev.shape) == 4, f"len(sem_map_prev.shape): {len(sem_map_prev.shape)}"
+        assert len(map_mask.shape) == 4, f"len(map_mask.shape)): {len(map_mask.shape)}"
+        sem_map = sem_map[None, ...]
+        sem_map_prev = sem_map_prev[None, ...]
+        map_mask = map_mask[None, ...]
+
     sem_map_prev = sem_map_prev * map_mask
     
     # update agent_position_map

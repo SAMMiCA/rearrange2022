@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Optional, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -155,7 +155,7 @@ class Semantic2DMapWithInventoryEncoderPooled(nn.Module):
         """
         unshuffle_sem_map_data: [batch_size, n_map_channels, width, height]
         walkthrough_sem_map_data: [batch_size, n_map_channels, width, height]
-        inventory_vector: [batch_size, n_channels(=n_map_channels-2)]
+        inventory_vector: [batch_size, n_channels(=n_map_channels-3)]
         """
         inventory = inventory_vector[:, :, None, None].repeat(
             [1, 1, *walkthrough_sem_map_data.shape[-2:]]
@@ -465,50 +465,117 @@ class SubtaskHistoryEncoder(nn.Module):
 #         return subtask_type_logprob, subtask_arg_logprob
 
 
+# class SubtaskPredictor(nn.Module):
+
+#     def __init__(
+#         self,
+#         hidden_size: int,
+#         # num_subtask_types: int = NUM_SUBTASK_TYPES,
+#         # num_subtask_arguments: int = NUM_SUBTASK_TARGET_OBJECTS,
+#         num_subtasks: int = NUM_SUBTASKS,
+#         # joint_prob: bool = False,
+#     ) -> None:
+#         super().__init__()
+#         # self.num_subtask_types = num_subtask_types
+#         # self.num_subtask_arguments = num_subtask_arguments
+#         self.num_subtasks = num_subtasks
+#         self.hidden_size = hidden_size
+#         # self.joint_prob = joint_prob
+
+#         self.linear_a = nn.Linear(hidden_size * 2, hidden_size)
+#         self.linear_a1 = nn.Linear(hidden_size, hidden_size)
+#         self.linear_a2 = nn.Linear(hidden_size * 2, hidden_size)
+
+#         # if self.joint_prob:
+#         #     self.linear_b = nn.Linear(
+#         #         hidden_size * 3, 
+#         #         (
+#         #             num_subtask_types 
+#         #             + num_subtask_arguments * num_subtask_types
+#         #         ),
+#         #     )
+#         # else:
+#         #     self.linear_b = nn.Linear(
+#         #         hidden_size * 3, 
+#         #         num_subtask_types + num_subtask_arguments
+#         #     )
+        
+#         self.linear_b = nn.Linear(hidden_size * 3, num_subtasks)
+#         self.act = nn.LeakyReLU()
+
+#     def forward_embedding(
+#         self,
+#         sem_map_inv_embeddings: torch.Tensor,
+#         subtask_history_embeddings: torch.Tensor,
+#     ):
+#         combined_embeddings = torch.cat([sem_map_inv_embeddings, subtask_history_embeddings], dim=1)
+
+#         x1 = self.act(self.linear_a(combined_embeddings))
+#         x2 = self.act(self.linear_a1(x1))
+#         x12 = torch.cat([x1, x2], dim=1)
+#         x3 = self.act(self.linear_a2(x12))
+
+#         x123 = torch.cat([x1, x2, x3], dim=1)
+#         x = self.linear_b(x123)
+
+#         return F.log_softmax(x, dim=1)
+#         # subtask_type_logits = x[:, :self.num_subtask_types]
+#         # subtask_arg_logits = x[:, self.num_subtask_types:]
+
+#         # b = subtask_arg_logits.shape[0]
+#         # subtask_type_logprob = F.log_softmax(subtask_type_logits, dim=1)
+#         # if self.joint_prob:
+#         #     subtask_arg_logits = subtask_arg_logits.view([b, self.num_subtask_types, self.num_subtask_arguments])
+#         #     subtask_arg_logprob = F.log_softmax(subtask_arg_logits, dim=2)
+#         # else:
+#         #     subtask_arg_logprob = F.log_softmax(subtask_arg_logits, dim=1)
+#         # # subtask_arg_logprob = F.log_softmax(subtask_arg_logits, dim=1)
+
+#         # return subtask_type_logprob, subtask_arg_logprob
+
+
 class SubtaskPredictor(nn.Module):
 
     def __init__(
         self,
         hidden_size: int,
-        # num_subtask_types: int = NUM_SUBTASK_TYPES,
-        # num_subtask_arguments: int = NUM_SUBTASK_TARGET_OBJECTS,
+        input_size: Optional[int] = None,
         num_subtasks: int = NUM_SUBTASKS,
-        # joint_prob: bool = False,
     ) -> None:
         super().__init__()
-        # self.num_subtask_types = num_subtask_types
-        # self.num_subtask_arguments = num_subtask_arguments
         self.num_subtasks = num_subtasks
         self.hidden_size = hidden_size
-        # self.joint_prob = joint_prob
 
-        self.linear_a = nn.Linear(hidden_size * 2, hidden_size)
+        if input_size is None:
+            input_size = hidden_size * 2
+
+        self.linear_a = nn.Linear(input_size, hidden_size)
         self.linear_a1 = nn.Linear(hidden_size, hidden_size)
         self.linear_a2 = nn.Linear(hidden_size * 2, hidden_size)
-
-        # if self.joint_prob:
-        #     self.linear_b = nn.Linear(
-        #         hidden_size * 3, 
-        #         (
-        #             num_subtask_types 
-        #             + num_subtask_arguments * num_subtask_types
-        #         ),
-        #     )
-        # else:
-        #     self.linear_b = nn.Linear(
-        #         hidden_size * 3, 
-        #         num_subtask_types + num_subtask_arguments
-        #     )
         
         self.linear_b = nn.Linear(hidden_size * 3, num_subtasks)
         self.act = nn.LeakyReLU()
 
+    def forward(
+        self,
+        x: torch.Tensor,
+    ):
+        x1 = self.act(self.linear_a(x))
+        x2 = self.act(self.linear_a1(x1))
+        x12 = torch.cat([x1, x2], dim=1)
+        x3 = self.act(self.linear_a2(x12))
+
+        x123 = torch.cat([x1, x2, x3], dim=1)
+        x = self.linear_b(x123)
+
+        return F.log_softmax(x, dim=1)
+
     def forward_embedding(
         self,
-        sem_map_inv_embeddings: torch.Tensor,
+        env_embeddings: torch.Tensor,
         subtask_history_embeddings: torch.Tensor,
     ):
-        combined_embeddings = torch.cat([sem_map_inv_embeddings, subtask_history_embeddings], dim=1)
+        combined_embeddings = torch.cat([env_embeddings, subtask_history_embeddings], dim=1)
 
         x1 = self.act(self.linear_a(combined_embeddings))
         x2 = self.act(self.linear_a1(x1))
@@ -519,18 +586,3 @@ class SubtaskPredictor(nn.Module):
         x = self.linear_b(x123)
 
         return F.log_softmax(x, dim=1)
-        # subtask_type_logits = x[:, :self.num_subtask_types]
-        # subtask_arg_logits = x[:, self.num_subtask_types:]
-
-        # b = subtask_arg_logits.shape[0]
-        # subtask_type_logprob = F.log_softmax(subtask_type_logits, dim=1)
-        # if self.joint_prob:
-        #     subtask_arg_logits = subtask_arg_logits.view([b, self.num_subtask_types, self.num_subtask_arguments])
-        #     subtask_arg_logprob = F.log_softmax(subtask_arg_logits, dim=2)
-        # else:
-        #     subtask_arg_logprob = F.log_softmax(subtask_arg_logits, dim=1)
-        # # subtask_arg_logprob = F.log_softmax(subtask_arg_logits, dim=1)
-
-        # return subtask_type_logprob, subtask_arg_logprob
-
-

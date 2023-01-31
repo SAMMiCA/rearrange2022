@@ -70,7 +70,7 @@ def positional_encoding(
     x: torch.Tensor,
     batch_ids: torch.Tensor,
 ):
-    b, c = x.shape
+    *b, c = x.shape
     assert c % 2 == 0
 
     inv_freq = 1.0 / (10000 ** (torch.arange(0, c, 2, device=x.device).float() / c))

@@ -36,6 +36,7 @@ class TaskAwareBaseExperimentConfig(RearrangeBaseExperimentConfig):
     ORDERED_OBJECT_TYPES = list(sorted(PICKUPABLE_OBJECTS + OPENABLE_OBJECTS))
 
     # Sensor Info
+    REQUIRE_SEMANTIC_SEGMENTATION = False
     REFERENCE_SEGMENTATION = True
     REFERENCE_POSE = False
     REFERENCE_INVENTORY = False
@@ -65,8 +66,8 @@ class TaskAwareBaseExperimentConfig(RearrangeBaseExperimentConfig):
     THOR_CONTROLLER_KWARGS = {
         **RearrangeBaseExperimentConfig.THOR_CONTROLLER_KWARGS,
         "renderDepthImage": True,
-        "renderSemanticSegmentation": REFERENCE_SEGMENTATION,
-        "renderInstanceSegmentation": REFERENCE_SEGMENTATION,
+        "renderSemanticSegmentation": (REQUIRE_SEMANTIC_SEGMENTATION and REFERENCE_SEGMENTATION),
+        "renderInstanceSegmentation": (REQUIRE_SEMANTIC_SEGMENTATION and REFERENCE_SEGMENTATION),
     }
     HEADLESS = True
 
@@ -128,41 +129,42 @@ class TaskAwareBaseExperimentConfig(RearrangeBaseExperimentConfig):
             ),
         ]
 
-        if cls.REFERENCE_SEGMENTATION:
-            sensors.append(
-                SemanticSegmentationSensor(
-                    ordered_object_types=cls.ORDERED_OBJECT_TYPES,
-                    height=cls.SCREEN_SIZE,
-                    width=cls.SCREEN_SIZE,
-                    uuid=cls.SEMANTIC_SEGMENTATION_UUID,
+        if cls.REQUIRE_SEMANTIC_SEGMENTATION:
+            if cls.REFERENCE_SEGMENTATION:
+                sensors.append(
+                    SemanticSegmentationSensor(
+                        ordered_object_types=cls.ORDERED_OBJECT_TYPES,
+                        height=cls.SCREEN_SIZE,
+                        width=cls.SCREEN_SIZE,
+                        uuid=cls.SEMANTIC_SEGMENTATION_UUID,
+                    )
                 )
-            )
-            sensors.append(
-                UnshuffledSemanticSegmentationSensor(
-                    ordered_object_types=cls.ORDERED_OBJECT_TYPES,
-                    height=cls.SCREEN_SIZE,
-                    width=cls.SCREEN_SIZE,
-                    uuid=cls.UNSHUFFLED_SEMANTIC_SEGMENTATION_UUID,
+                sensors.append(
+                    UnshuffledSemanticSegmentationSensor(
+                        ordered_object_types=cls.ORDERED_OBJECT_TYPES,
+                        height=cls.SCREEN_SIZE,
+                        width=cls.SCREEN_SIZE,
+                        uuid=cls.UNSHUFFLED_SEMANTIC_SEGMENTATION_UUID,
+                    )
                 )
-            )
-        else:
-            # add raw rgb sensors to infer semantic segmentation masks
-            sensors.append(
-                RGBRearrangeSensor(
-                    height=cls.SCREEN_SIZE,
-                    width=cls.SCREEN_SIZE,
-                    use_resnet_normalization=False,
-                    uuid=cls.EGOCENTRIC_RAW_RGB_UUID,
+            else:
+                # add raw rgb sensors to infer semantic segmentation masks
+                sensors.append(
+                    RGBRearrangeSensor(
+                        height=cls.SCREEN_SIZE,
+                        width=cls.SCREEN_SIZE,
+                        use_resnet_normalization=False,
+                        uuid=cls.EGOCENTRIC_RAW_RGB_UUID,
+                    )
                 )
-            )
-            sensors.append(
-                UnshuffledRGBRearrangeSensor(
-                    height=cls.SCREEN_SIZE,
-                    width=cls.SCREEN_SIZE,
-                    use_resnet_normalization=False,
-                    uuid=cls.UNSHUFFLED_RAW_RGB_UUID,
+                sensors.append(
+                    UnshuffledRGBRearrangeSensor(
+                        height=cls.SCREEN_SIZE,
+                        width=cls.SCREEN_SIZE,
+                        use_resnet_normalization=False,
+                        uuid=cls.UNSHUFFLED_RAW_RGB_UUID,
+                    )
                 )
-            )
         
         return sensors
 

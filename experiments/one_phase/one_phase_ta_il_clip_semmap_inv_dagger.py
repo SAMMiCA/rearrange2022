@@ -16,6 +16,7 @@ class OnePhaseTaskAwareRearrangeILClipSemmapWithInvDaggerExperimentConfig(OnePha
     
     CNN_PREPROCESSOR_TYPE_AND_PRETRAINING = ("RN50", "clip")
     IL_PIPELINE_TYPE: Optional[str] = "4proc"
+    REQUIRE_SEMANTIC_SEGMENTATION = True
     REFERENCE_SEGMENTATION = True
     HEADLESS = True
 
