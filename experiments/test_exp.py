@@ -42,6 +42,8 @@ from task_aware_rearrange.preprocessors import Semantic3DMapPreprocessor
 from task_aware_rearrange.models import (
     OnePhaseSemanticMappingWithInventorySubtaskHistoryActorCriticRNN,
     OnePhaseTaskAwareActorCriticRNN,
+    OnePhaseResNetWithInventoryActorCriticRNN,
+    OnePhaseResNetWithInventorySubtaskHistoryPredictionActorCriticRNN,
 )
 
 
@@ -52,13 +54,13 @@ class ExpertTestExpConfig(RearrangeBaseExperimentConfig):
     ORDERED_OBJECT_TYPES = list(sorted(PICKUPABLE_OBJECTS + OPENABLE_OBJECTS))
 
     # Sensor Info
-    REQUIRE_SEMANTIC_3D_MAP = True
-    REQUIRE_SEMANTIC_SEGMENTATION = True
+    REQUIRE_SEMANTIC_3D_MAP = False
+    REQUIRE_SEMANTIC_SEGMENTATION = False
     REQUIRE_EXPERTS = True
     REQUIRE_INVENTORY = True
 
     REFERENCE_DEPTH = True
-    REFERENCE_SEGMENTATION = True
+    REFERENCE_SEGMENTATION = False
     REFERENCE_POSE = False
     REFERENCE_INVENTORY = False
 
@@ -582,18 +584,30 @@ class ExpertTestExpConfig(RearrangeBaseExperimentConfig):
 
     @classmethod
     def create_model(cls, **kwargs) -> nn.Module:
-        return OnePhaseSemanticMappingWithInventorySubtaskHistoryActorCriticRNN(
+        # return OnePhaseSemanticMappingWithInventorySubtaskHistoryActorCriticRNN(
+        #     action_space=gym.spaces.Discrete(len(cls.actions())),
+        #     observation_space=kwargs["sensor_preprocessor_graph"].observation_spaces,
+        #     rgb_uuid=cls.EGOCENTRIC_RGB_UUID if cls.CNN_PREPROCESSOR_TYPE_AND_PRETRAINING is None else cls.EGOCENTRIC_RGB_RESNET_UUID,
+        #     unshuffled_rgb_uuid=cls.UNSHUFFLED_RGB_UUID if cls.CNN_PREPROCESSOR_TYPE_AND_PRETRAINING is None else cls.UNSHUFFLED_RGB_RESNET_UUID,
+        #     prev_action_embedding_dim=cls.PREV_ACTION_EMBEDDING_DIM,
+        #     hidden_size=cls.HIDDEN_SIZE,
+        #     num_rnn_layers=cls.NUM_RNN_LAYERS,
+        #     rnn_type=cls.RNN_TYPE,
+        #     sem_map_uuid=cls.SEMANTIC_MAP_UUID,
+        #     unshuffled_sem_map_uuid=cls.UNSHUFFLED_SEMANTIC_MAP_UUID,
+        #     inventory_uuid=cls.INVENTORY_UUID,
+        #     num_repeats=cls.training_pipeline().training_settings.update_repeats,
+        #     expert_subtask_uuid=cls.EXPERT_SUBTASK_UUID
+        # )
+        return OnePhaseResNetWithInventorySubtaskHistoryPredictionActorCriticRNN(
             action_space=gym.spaces.Discrete(len(cls.actions())),
             observation_space=kwargs["sensor_preprocessor_graph"].observation_spaces,
             rgb_uuid=cls.EGOCENTRIC_RGB_UUID if cls.CNN_PREPROCESSOR_TYPE_AND_PRETRAINING is None else cls.EGOCENTRIC_RGB_RESNET_UUID,
             unshuffled_rgb_uuid=cls.UNSHUFFLED_RGB_UUID if cls.CNN_PREPROCESSOR_TYPE_AND_PRETRAINING is None else cls.UNSHUFFLED_RGB_RESNET_UUID,
             prev_action_embedding_dim=cls.PREV_ACTION_EMBEDDING_DIM,
+            inventory_embedding_dim=cls.PREV_ACTION_EMBEDDING_DIM,
             hidden_size=cls.HIDDEN_SIZE,
             num_rnn_layers=cls.NUM_RNN_LAYERS,
             rnn_type=cls.RNN_TYPE,
-            sem_map_uuid=cls.SEMANTIC_MAP_UUID,
-            unshuffled_sem_map_uuid=cls.UNSHUFFLED_SEMANTIC_MAP_UUID,
             inventory_uuid=cls.INVENTORY_UUID,
-            num_repeats=cls.training_pipeline().training_settings.update_repeats,
-            expert_subtask_uuid=cls.EXPERT_SUBTASK_UUID
         )

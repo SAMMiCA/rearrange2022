@@ -562,10 +562,10 @@ class SubtaskPredictor(nn.Module):
     ):
         x1 = self.act(self.linear_a(x))
         x2 = self.act(self.linear_a1(x1))
-        x12 = torch.cat([x1, x2], dim=1)
+        x12 = torch.cat([x1, x2], dim=-1)
         x3 = self.act(self.linear_a2(x12))
 
-        x123 = torch.cat([x1, x2, x3], dim=1)
+        x123 = torch.cat([x1, x2, x3], dim=-1)
         x = self.linear_b(x123)
 
         return F.log_softmax(x, dim=1)

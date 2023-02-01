@@ -151,6 +151,604 @@ class OnePhaseResNetActorCriticRNN(ActorCriticModel):
         )
 
 
+class OnePhaseResNetWithInventoryActorCriticRNN(OnePhaseResNetActorCriticRNN):
+
+    def __init__(
+        self,
+        action_space: gym.Space,
+        observation_space: gym.spaces.Dict,
+        rgb_uuid: str,
+        unshuffled_rgb_uuid: str,
+        inventory_uuid: str,
+        prev_action_embedding_dim: int = 32,
+        inventory_embedding_dim: int = 32,
+        hidden_size: int = 512,
+        num_rnn_layers: int = 1,
+        rnn_type: str = "LSTM",
+    ):
+        super().__init__(
+            action_space=action_space, 
+            observation_space=observation_space,
+            rgb_uuid=rgb_uuid,
+            unshuffled_rgb_uuid=unshuffled_rgb_uuid,
+            prev_action_embedding_dim=prev_action_embedding_dim,
+            hidden_size=hidden_size,
+            num_rnn_layers=num_rnn_layers,
+            rnn_type=rnn_type,
+        )
+
+        self.inventory_uuid = inventory_uuid
+        self.inventory_embedding_dim = inventory_embedding_dim
+        self.inventory_embedder = nn.Embedding(
+            NUM_OBJECT_TYPES, embedding_dim=self.inventory_embedding_dim
+        )
+
+        # State encoder for navigation and interaction
+        self.state_encoder = RNNStateEncoder(
+            input_size=(
+                self._hidden_size
+                + self.prev_action_embedding_dim
+                + self.inventory_embedding_dim
+            ),
+            hidden_size=self._hidden_size,
+            num_layers=self.num_rnn_layers,
+            rnn_type=self.rnn_type,
+        )
+
+    def forward(
+        self, 
+        observations: ObservationType, 
+        memory: Memory, 
+        prev_actions: ActionType, 
+        masks: torch.FloatTensor
+    ) -> Tuple[ActorCriticOutput[DistributionType], Optional[Memory]]:
+        """
+        observations: [steps, samplers, (agents), ...]
+        memory: [sampler, ...] 
+        prev_actions: [steps, samplers, ...]
+        masks: [steps, samplers, agents, 1], zero indicates the steps where a new episode/task starts
+        """
+        nsteps, nsamplers = masks.shape[:2]
+        
+        # Egocentric images
+        ego_img = observations[self.rgb_uuid]
+        w_ego_img = observations[self.unshuffled_rgb_uuid]
+        ego_img_embeddings = self.visual_encoder(
+            u_img_emb=ego_img,
+            w_img_emb=w_ego_img
+        )   # [steps, samplers, vis_feature_embedding_dim]
+
+        # Previous actions (low-level actions)
+        prev_action_embeddings = self.prev_action_embedder(
+            (masks.long() * (prev_actions.unsqueeze(-1) + 1))
+        ).squeeze(-2)   # [steps, samplers, prev_action_embedding_dim]
+
+        # Inventory vectors
+        # inventory one-hot vector - 0 ~ 71: objects, 72: unknown object
+        # Let the index 0 becomes True when the agent is holding an unknown object or not holding
+        inventory = observations[self.inventory_uuid]                           # [nsteps, nsamplers, num_objects]
+        inventory_index = (inventory.max(-1).indices + 1) % NUM_OBJECT_TYPES    # [nsteps, nsamplers]
+        inventory_embeddings = self.inventory_embedder(inventory_index)
+
+        to_cat = [
+            ego_img_embeddings,
+            prev_action_embeddings,
+            inventory_embeddings,
+        ]
+        obs_for_rnn = torch.cat(to_cat, dim=-1)
+
+        rnn_outs, rnn_hidden_states = self.state_encoder(
+            obs_for_rnn,
+            memory.tensor("rnn"),
+            masks
+        )                
+        extras = {}
+
+        return (
+            ActorCriticOutput(
+                distributions=self.actor(rnn_outs), values=self.critic(rnn_outs), extras=extras
+            ), 
+            memory.set_tensor("rnn", rnn_hidden_states)
+        )
+
+
+class OnePhaseResNetWithInventorySubtaskHistoryActorCriticRNN(OnePhaseResNetWithInventoryActorCriticRNN):
+
+    def __init__(
+        self,
+        action_space: gym.Space,
+        observation_space: gym.spaces.Dict,
+        rgb_uuid: str,
+        unshuffled_rgb_uuid: str,
+        inventory_uuid: str,
+        expert_subtask_uuid: str,
+        prev_action_embedding_dim: int = 32,
+        inventory_embedding_dim: int = 32,
+        hidden_size: int = 512,
+        num_rnn_layers: int = 1,
+        rnn_type: str = "LSTM",
+        num_subtasks: int = NUM_SUBTASKS,
+        num_repeats: int = 1,
+    ):
+        super().__init__(
+            action_space=action_space, 
+            observation_space=observation_space,
+            rgb_uuid=rgb_uuid,
+            unshuffled_rgb_uuid=unshuffled_rgb_uuid,
+            inventory_uuid=inventory_uuid,
+            prev_action_embedding_dim=prev_action_embedding_dim,
+            inventory_embedding_dim=inventory_embedding_dim,
+            hidden_size=hidden_size,
+            num_rnn_layers=num_rnn_layers,
+            rnn_type=rnn_type,
+        )
+        self.num_repeats = num_repeats
+
+        self.expert_subtask_uuid = expert_subtask_uuid
+        self.subtask_history_encoder = SubtaskHistoryEncoder(
+            hidden_size=hidden_size,
+            num_subtasks=num_subtasks,
+        )
+
+        # State encoder for navigation and interaction
+        self.state_encoder = RNNStateEncoder(
+            input_size=(
+                self._hidden_size * 2
+                + self.prev_action_embedding_dim 
+                + self.inventory_embedding_dim
+            ),
+            hidden_size=self._hidden_size,
+            num_layers=self.num_rnn_layers,
+            rnn_type=self.rnn_type,
+        )
+
+        self.subtask_history = []
+        self.action_history = []
+        self.repeat_count = 0
+
+    def _reset_history(self):
+        self.subtask_history = []
+        self.action_history = []
+        self.repeat_count = 0
+
+    def _recurrent_memory_specification(self) -> Optional[FullMemorySpecType]:
+        return dict(
+            rnn=(
+                (
+                    ("layer", self.num_rnn_recurrent_layers),
+                    ("sampler", None),
+                    ("hidden", self._hidden_size),
+                ),
+                torch.float32,
+            ),
+            agent_history=(
+                (
+                    ("sampler", None),
+                    ("history", 2),     # 0 for subtask, 1 for prev_action
+                    ("length", 512),    # history vector length (max_steps // num_mini_batch + 1)
+                ),
+                torch.long,
+            )
+        )
+
+    def forward(
+        self,
+        observations: ObservationType,
+        memory: Memory,
+        prev_actions: ActionType,
+        masks: torch.FloatTensor
+    ) -> Tuple[ActorCriticOutput[DistributionType], Optional[Memory]]:
+        """
+        observations: [steps, samplers, (agents), ...]
+        memory: [sampler, ...] 
+        prev_actions: [steps, samplers, ...]
+        masks: [steps, samplers, agents, 1], zero indicates the steps where a new episode/task starts
+        """
+        nsteps, nsamplers = masks.shape[:2]
+        
+        # Egocentric images
+        ego_img = observations[self.rgb_uuid]
+        w_ego_img = observations[self.unshuffled_rgb_uuid]
+        ego_img_embeddings = self.visual_encoder(
+            u_img_emb=ego_img,
+            w_img_emb=w_ego_img
+        )   # [steps, samplers, vis_feature_embedding_dim]
+
+        # Previous actions (low-level actions)
+        prev_action_embeddings = self.prev_action_embedder(
+            (masks.long() * (prev_actions.unsqueeze(-1) + 1))
+        ).squeeze(-2)   # [steps, samplers, prev_action_embedding_dim]
+
+        # Inventory vectors
+        # inventory one-hot vector - 0 ~ 71: objects, 72: unknown object
+        # Let the index 0 becomes True when the agent is holding an unknown object or not holding
+        inventory = observations[self.inventory_uuid]                           # [nsteps, nsamplers, num_objects]
+        inventory_index = (inventory.max(-1).indices + 1) % NUM_OBJECT_TYPES    # [nsteps, nsamplers]
+        inventory_embeddings = self.inventory_embedder(inventory_index)
+
+        # Histories: (sampler, type, length) - from memory
+        history = memory.tensor('agent_history')
+        history_masks = masks.view(*masks.shape[:2])
+        subtask_history = observations[self.expert_subtask_uuid][..., 0]        # [nsteps, nsamplers]
+
+        if torch.is_grad_enabled():
+            # when updating loss
+            # generate the sampler-wise subtask_history_embeddings
+            subtask_history_embeddings = []
+            for sampler in range(nsamplers):
+                assert (
+                    len(self.subtask_history[sampler]) == nsteps + 1
+                    and len(self.action_history[sampler]) == nsteps + 1
+                )
+                subtask_index_history = masks.new_tensor(
+                    self.subtask_history[sampler][:-1], dtype=torch.long,
+                )
+                action_index_history = masks.new_tensor(
+                    self.action_history[sampler][:-1], dtype=torch.long
+                )
+                subtask_history_embedding = self.subtask_history_encoder(
+                    subtask_index_history=subtask_index_history,
+                    seq_masks=history_masks[:, sampler],
+                )
+                subtask_history_embeddings.append(subtask_history_embedding[:-1])
+            
+            subtask_history_embeddings = torch.stack(
+                subtask_history_embeddings, dim=1
+            )   # [nsteps, nsamplers, emb_feat_dims]
+
+        else:
+            # When Collecting the step-results (Inference)
+            assert nsteps ==1
+
+            # Reset the history memory when the environment is reset
+            history_ = (history * masks.squeeze(0).unsqueeze(-1).repeat((1, 2, 1))).long()
+
+            # To identify the valid portion of memory tensor
+            nonzero_idxs = []
+            for sampler in range(nsamplers):
+                idxs = []
+                for type in range(2):
+                    idxs.append(
+                        (history_[sampler, type] == 0).nonzero().min()
+                    )
+                idxs = torch.stack(idxs)
+                nonzero_idxs.append(idxs)
+            nonzero_idxs = torch.stack(nonzero_idxs)    # [nsamplers, 2]
+
+            # Initialize the history list
+            if (
+                len(self.action_history) == 0
+                or len(self.action_history) != nsamplers
+            ):
+                self.action_history = [[] for _ in range(nsamplers)]
+
+            if (
+                len(self.subtask_history) == 0
+                or len(self.subtask_history) != nsamplers
+            ):
+                self.subtask_history = [[] for _ in range(nsamplers)]
+
+            # Generate the subtask history embeddins using stored subtask history
+            # for `CURRENT` episode from each sampler
+            # To distinguish the start of new episode, history memory stores the (index + 1)
+            # instead of just storing `index` of subtask/actions
+            subtask_history_embeddings = []
+            for sampler in range(nsamplers):
+                subtask_index_history = history_[sampler, 0, :(nonzero_idxs[sampler, 0])] - 1
+                
+                history_[sampler, 1, nonzero_idxs[sampler, 1]] = prev_actions[0][sampler] + 1
+                self.action_history[sampler].append(prev_actions[0][sampler].item())
+
+                seq_masks = torch.zeros_like(subtask_index_history)
+                subtask_history_embedding = self.subtask_history_encoder(
+                    subtask_index_history=subtask_index_history,
+                    seq_masks=seq_masks
+                )   # [episode_len + 1, emb_feat_dims]
+                subtask_history_embeddings.append(subtask_history_embedding[-1:])
+
+                history_[sampler, 0, nonzero_idxs[sampler, 0]] = subtask_history[0, sampler] + 1
+                self.subtask_history[sampler].append(subtask_history[0, sampler].item())
+            
+            memory = memory.set_tensor(
+                key="agent_history",
+                tensor=history_,
+            )
+            subtask_history_embeddings = torch.stack(
+                subtask_history_embeddings, dim=1
+            )   # [1, nsamplers, emb_feat_dims]
+
+        assert subtask_history_embeddings.shape[:2] == masks.shape[:2]
+
+        to_cat = [
+            ego_img_embeddings,
+            prev_action_embeddings,
+            inventory_embeddings,
+            subtask_history_embeddings,
+        ]
+        obs_for_rnn = torch.cat(to_cat, dim=-1)
+
+        rnn_outs, rnn_hidden_states = self.state_encoder(
+            obs_for_rnn,
+            memory.tensor("rnn"),
+            masks
+        )                
+        extras = {}
+
+        return (
+            ActorCriticOutput(
+                distributions=self.actor(rnn_outs), values=self.critic(rnn_outs), extras=extras
+            ), 
+            memory.set_tensor("rnn", rnn_hidden_states)
+        )
+
+
+class OnePhaseResNetWithInventorySubtaskHistoryPredictionActorCriticRNN(OnePhaseResNetWithInventoryActorCriticRNN):
+    def __init__(
+        self,
+        action_space: gym.Space,
+        observation_space: gym.spaces.Dict,
+        rgb_uuid: str,
+        unshuffled_rgb_uuid: str,
+        inventory_uuid: str,
+        prev_action_embedding_dim: int = 32,
+        inventory_embedding_dim: int = 32,
+        hidden_size: int = 512,
+        num_rnn_layers: int = 1,
+        rnn_type: str = "LSTM",
+        num_subtasks: int = NUM_SUBTASKS,
+        num_repeats: int = 1,
+        num_losses: int = 2,
+    ):
+        super().__init__(
+            action_space=action_space, 
+            observation_space=observation_space,
+            rgb_uuid=rgb_uuid,
+            unshuffled_rgb_uuid=unshuffled_rgb_uuid,
+            inventory_uuid=inventory_uuid,
+            prev_action_embedding_dim=prev_action_embedding_dim,
+            inventory_embedding_dim=inventory_embedding_dim,
+            hidden_size=hidden_size,
+            num_rnn_layers=num_rnn_layers,
+            rnn_type=rnn_type,
+        )
+        self.num_repeats = num_repeats
+        self.num_losses = num_losses
+
+        self.subtask_history_encoder = SubtaskHistoryEncoder(
+            hidden_size=hidden_size,
+            num_subtasks=num_subtasks,
+        )
+
+        self.subtask_predictor = SubtaskPredictor(
+            input_size=(
+                self._hidden_size * 2
+                + self.prev_action_embedding_dim 
+                + self.inventory_embedding_dim
+            ),
+            hidden_size=hidden_size,
+            num_subtasks=num_subtasks,
+        )
+
+        # State encoder for navigation and interaction
+        self.state_encoder = RNNStateEncoder(
+            input_size=(
+                self._hidden_size * 2
+                + self.prev_action_embedding_dim 
+                + self.inventory_embedding_dim
+            ),
+            hidden_size=self._hidden_size,
+            num_layers=self.num_rnn_layers,
+            rnn_type=self.rnn_type,
+        )
+
+        self.subtask_history = []
+        self.action_history = []
+        self.repeat_count = 0
+
+    def _reset_history(self, nsamplers: int):
+        self.subtask_history = [[] for _ in range(nsamplers)]
+        self.action_history = [[] for _ in range(nsamplers)]
+        self.repeat_count = 0
+
+    def _recurrent_memory_specification(self) -> Optional[FullMemorySpecType]:
+        return dict(
+            rnn=(
+                (
+                    ("layer", self.num_rnn_recurrent_layers),
+                    ("sampler", None),
+                    ("hidden", self._hidden_size),
+                ),
+                torch.float32,
+            ),
+            agent_history=(
+                (
+                    ("sampler", None),
+                    ("history", 2),     # 0 for subtask, 1 for prev_action
+                    ("length", 512),    # history vector length (max_steps // num_mini_batch + 1)
+                ),
+                torch.long,
+            )
+        )
+
+    def forward(
+        self,
+        observations: ObservationType,
+        memory: Memory,
+        prev_actions: ActionType,
+        masks: torch.FloatTensor
+    ) -> Tuple[ActorCriticOutput[DistributionType], Optional[Memory]]:
+        """
+        observations: [steps, samplers, (agents), ...]
+        memory: [sampler, ...] 
+        prev_actions: [steps, samplers, ...]
+        masks: [steps, samplers, agents, 1], zero indicates the steps where a new episode/task starts
+        """
+        nsteps, nsamplers = masks.shape[:2]
+        
+        # Egocentric images
+        ego_img = observations[self.rgb_uuid]
+        w_ego_img = observations[self.unshuffled_rgb_uuid]
+        ego_img_embeddings = self.visual_encoder(
+            u_img_emb=ego_img,
+            w_img_emb=w_ego_img
+        )   # [steps, samplers, vis_feature_embedding_dim]
+
+        # Previous actions (low-level actions)
+        prev_action_embeddings = self.prev_action_embedder(
+            (masks.long() * (prev_actions.unsqueeze(-1) + 1))
+        ).squeeze(-2)   # [steps, samplers, prev_action_embedding_dim]
+
+        # Inventory vectors
+        # inventory one-hot vector - 0 ~ 71: objects, 72: unknown object
+        # Let the index 0 becomes True when the agent is holding an unknown object or not holding
+        inventory = observations[self.inventory_uuid]                           # [nsteps, nsamplers, num_objects]
+        inventory_index = (inventory.max(-1).indices + 1) % NUM_OBJECT_TYPES    # [nsteps, nsamplers]
+        inventory_embeddings = self.inventory_embedder(inventory_index)
+
+        # Histories: (sampler, type, length) - from memory
+        history = memory.tensor('agent_history')
+        history_masks = masks.view(*masks.shape[:2])
+
+        if torch.is_grad_enabled():
+            # when updating loss
+            # generate the sampler-wise subtask_history_embeddings
+            # from example_utils import ForkedPdb; ForkedPdb().set_trace()
+            subtask_history_embeddings = []
+            for sampler in range(nsamplers):
+                assert (
+                    len(self.subtask_history[sampler]) == nsteps + 1
+                    and len(self.action_history[sampler]) == nsteps + 1
+                ), f"""
+                len(self.subtask_history[{sampler}]) = {len(self.subtask_history[sampler])}, 
+                len(self.action_history[{sampler}]) = {len(self.action_history[sampler])},
+                nsteps + 1 = {nsteps + 1}
+                """
+                subtask_index_history = masks.new_tensor(
+                    self.subtask_history[sampler][:-1], dtype=torch.long,
+                )
+                action_index_history = masks.new_tensor(
+                    self.action_history[sampler][:-1], dtype=torch.long
+                )
+                subtask_history_embedding = self.subtask_history_encoder(
+                    subtask_index_history=subtask_index_history,
+                    seq_masks=history_masks[:, sampler],
+                )
+                subtask_history_embeddings.append(subtask_history_embedding[:-1])
+            
+            subtask_history_embeddings = torch.stack(
+                subtask_history_embeddings, dim=1
+            )   # [nsteps, nsamplers, emb_feat_dims]
+
+        else:
+            # When Collecting the step-results (Inference)
+            assert nsteps == 1
+
+            # Reset the history memory when the environment is reset
+            history_ = (history * masks.squeeze(0).unsqueeze(-1).repeat((1, 2, 1))).long()
+
+            # To identify the valid portion of memory tensor
+            nonzero_idxs = []
+            for sampler in range(nsamplers):
+                idxs = []
+                for type in range(2):
+                    idxs.append(
+                        (history_[sampler, type] == 0).nonzero().min()
+                    )
+                idxs = torch.stack(idxs)
+                nonzero_idxs.append(idxs)
+            nonzero_idxs = torch.stack(nonzero_idxs)    # [nsamplers, 2]
+
+            # Initialize the history list
+            if (
+                len(self.action_history) == 0
+                or len(self.action_history) != nsamplers
+            ):
+                self.action_history = [[] for _ in range(nsamplers)]
+
+            if (
+                len(self.subtask_history) == 0
+                or len(self.subtask_history) != nsamplers
+            ):
+                self.subtask_history = [[] for _ in range(nsamplers)]
+
+            # Generate the subtask history embeddins using stored subtask history
+            # for `CURRENT` episode from each sampler
+            # To distinguish the start of new episode, history memory stores the (index + 1)
+            # instead of just storing `index` of subtask/actions
+            subtask_history_embeddings = []
+            for sampler in range(nsamplers):
+                subtask_index_history = history_[sampler, 0, :(nonzero_idxs[sampler, 0])] - 1
+                
+                history_[sampler, 1, nonzero_idxs[sampler, 1]] = prev_actions[0][sampler] + 1
+                self.action_history[sampler].append(prev_actions[0][sampler].item())
+                memory = memory.set_tensor(
+                    key="agent_history",
+                    tensor=history_,
+                )
+
+                seq_masks = torch.zeros_like(subtask_index_history)
+                subtask_history_embedding = self.subtask_history_encoder(
+                    subtask_index_history=subtask_index_history,
+                    seq_masks=seq_masks
+                )   # [episode_len + 1, emb_feat_dims]
+                subtask_history_embeddings.append(subtask_history_embedding[-1:])
+
+            subtask_history_embeddings = torch.stack(
+                subtask_history_embeddings, dim=1
+            )   # [1, nsamplers, emb_feat_dims]
+
+        assert subtask_history_embeddings.shape[:2] == masks.shape[:2]
+
+        to_cat = [
+            ego_img_embeddings,
+            prev_action_embeddings,
+            inventory_embeddings,
+            subtask_history_embeddings,
+        ]
+        obs_for_rnn = torch.cat(to_cat, dim=-1)
+
+        rnn_outs, rnn_hidden_states = self.state_encoder(
+            obs_for_rnn,
+            memory.tensor("rnn"),
+            masks
+        )
+
+        extras = {}
+        subtask_logits = self.subtask_predictor(obs_for_rnn)    # [nsteps, nsamplers, num_subtasks]
+        if torch.is_grad_enabled():
+            extras["subtask_logits"] = subtask_logits
+            self.repeat_count += 1
+        else:
+            assert nsteps == 1
+            history = memory.tensor("agent_history")
+            history_ = torch.clone(history)
+            if (
+                len(self.subtask_history) == 0
+                or len(self.subtask_history) != nsamplers
+            ):
+                self.subtask_history = [[] for _ in range(nsamplers)]
+
+            subtask_index = torch.max(subtask_logits, dim=-1).indices   # [nsteps, nsamplers]
+            for sampler in range(nsamplers):
+                history_[sampler, 0, nonzero_idxs[sampler, 0]] = subtask_index[0, sampler] + 1
+                self.subtask_history[sampler].append(subtask_index[0, sampler].item())
+            
+            memory = memory.set_tensor(
+                key="agent_history",
+                tensor=history_,
+            )
+
+        if torch.is_grad_enabled() and self.repeat_count == self.num_repeats:
+            self._reset_history(nsamplers=nsamplers)
+
+        return (
+            ActorCriticOutput(
+                distributions=self.actor(rnn_outs), values=self.critic(rnn_outs), extras=extras
+            ), 
+            memory.set_tensor("rnn", rnn_hidden_states)
+        )
+
+
 class OnePhaseSemanticMappingActorCriticRNN(OnePhaseResNetActorCriticRNN):
 
     def __init__(

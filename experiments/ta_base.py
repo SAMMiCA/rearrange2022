@@ -270,8 +270,9 @@ class TaskAwareBaseExperimentConfig(RearrangeBaseExperimentConfig):
         sampler_devices = None
         if mode == "train":
             nprocesses = cls.num_train_processes() if torch.cuda.is_available() else 1
+            availalbe_gpus = num_gpus - 1 if num_gpus > 1 else num_gpus
             devices = (
-                list(range(min(nprocesses, num_gpus)))
+                list(range(min(nprocesses, availalbe_gpus)))
                 if has_gpu
                 else [torch.device("cpu")]
             )

@@ -83,7 +83,7 @@ if __name__ == "__main__":
             raise NotImplementedError
         
         machine_params = ExpertTestExpConfig.machine_params(stage)
-        total_processes = machine_params.nprocesses[0]
+        total_processes = sum(machine_params.nprocesses)
 
         sampler_devices_as_ints = [0]
 
@@ -91,7 +91,7 @@ if __name__ == "__main__":
             fn(
                 process_ind=it,
                 total_processes=total_processes,
-                devices=sampler_devices_as_ints,
+                devices=[it],
                 seeds=None,
             )
             for it in range(total_processes)
