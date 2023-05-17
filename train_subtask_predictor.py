@@ -58,6 +58,14 @@ def get_args():
         required=False,
     )
     parser.set_defaults(shuffle=False)
+    parser.add_argument(
+        "-r",
+        "--resume",
+        dest="resume",
+        action="store_true",
+        required=False,
+    )
+    parser.set_defaults(shuffle=False)
 
     parser.add_argument(
         "--data_dir",
@@ -84,6 +92,18 @@ def get_args():
         type=str,
         default="clip",
         required=False,
+    )
+    parser.add_argument(
+        "--prev_action",
+        type=lambda s: s.lower() in ['true', '1'],
+        default="true",
+        required=False
+    )
+    parser.add_argument(
+        "--semantic_map_with_inventory",
+        type=lambda s: s.lower() in ['true', '1'],
+        default="false",
+        required=False
     )
     parser.add_argument(
         "--semantic_map",
@@ -410,7 +430,7 @@ if __name__ == "__main__":
 
     acc_unshuffle_semmap = None
     acc_walkthrough_semmap = None
-    if args.semantic_map:
+    if args.semantic_map or args.semantic_map_with_inventory:
         grid_params = GridParameters()
         map_shape = (
             int(grid_params.GRID_SIZE_X / grid_params.GRID_RES),
@@ -429,6 +449,8 @@ if __name__ == "__main__":
         prev_action_embedding_dim=prev_action_emb_dim,
         egoview_embedding_dim=egoview_emb_dim,
         resnet_embed=args.resnet,
+        prev_action_embd=args.prev_action,
+        semantic_map_with_inventory=args.semantic_map_with_inventory,
         semantic_map_embed=args.semantic_map,
         inventory=args.inventory,
     ).to(device)
@@ -447,12 +469,17 @@ if __name__ == "__main__":
     start_time = time.time()
     acc_iter = 0
     acc_batch = 0
+    acc_val_iter = 0
+    acc_val_batch = 0
 
     for epoch in range(args.num_epochs):
-        num_data = 0
+        epoch_iter = 0
         epoch_batch = 0
         epoch_train_loss = 0.0
+        epoch_train_acc = 0.0
         running_loss = 0.0
+        running_acc = 0.0
+        running_iter = 0
         with tqdm(train_data_loader, unit=" batch") as tepoch:
             tepoch.set_description_str(f'Epoch {epoch + 1}]')
             prev_actions = torch.zeros((args.batch_size + 1)).long()
@@ -478,8 +505,9 @@ if __name__ == "__main__":
                 model_inputs = {}
                 # Previous action is same with the batch["expert_subtask_action"][1:, -2].
                 bsize = batch["masks"].shape[0]
-                num_data += bsize
                 acc_iter += bsize
+                epoch_iter += bsize
+                running_iter += bsize
                 prev_actions[0] = prev_actions[-1]
                 prev_actions[1:bsize+1] = batch["expert_subtask_action"][:, -2]
                 model_inputs["prev_actions"] = prev_actions[:bsize].to(device)
@@ -499,7 +527,7 @@ if __name__ == "__main__":
                 # Preprocessing for Semantic 3D Mapping
                 unshuffle_semmap = None
                 walkthrough_semmap = None
-                if args.semantic_map:
+                if args.semantic_map or args.semantic_map_with_inventory:
                     unshuffle_semmap = []
                     walkthrough_semmap = []
 
@@ -538,7 +566,6 @@ if __name__ == "__main__":
                         unshuffle_semmap.append(acc_unshuffle_semmap)
                         walkthrough_semmap.append(acc_walkthrough_semmap)
 
-                    import pdb; pdb.set_trace()
                     unshuffle_semmap = torch.stack(unshuffle_semmap)
                     walkthrough_semmap = torch.stack(walkthrough_semmap)
                     # import pdb; pdb.set_trace()
@@ -546,7 +573,7 @@ if __name__ == "__main__":
                 model_inputs["walkthrough_semmap"] = walkthrough_semmap
 
                 # Inventory Vector
-                if args.inventory:
+                if args.inventory or args.semantic_map_with_inventory:
                     model_inputs["inventory"] = batch["inventory"].to(device)
                 
                 # Data for Subtask/Action Histories
@@ -569,18 +596,29 @@ if __name__ == "__main__":
 
                 running_loss += loss.item()
                 epoch_train_loss += loss.item()
+                pred_labels = torch.argmax(output, axis=1)
+                acc = (pred_labels == labels).sum()
+                epoch_train_acc += acc.item()
+                running_acc += acc.item()
 
-                tepoch.set_description_str(f'Epoch {epoch + 1}] Training Loss: {loss.item():.04f}')
+                tepoch.set_description_str(f'Epoch {epoch + 1}] Training Loss: {loss.item():.04f} | Training Accuracy {(acc.item() / bsize):.04f}')
 
-                # Log every 1000 minibatches
-                if epoch_batch % args.log_interval == 0:
-                    writer.add_scalar("training_loss_batch", running_loss / args.log_interval, acc_batch)
+                # Log every (args.log_interval) minibatches
+                if epoch_batch % int(args.log_interval / (args.batch_size / 64)) == 0:
+                    writer.add_scalar("training_loss_iter", running_loss / args.log_interval, acc_iter)
+                    writer.add_scalar("training_accuracy_iter", (running_acc / running_iter) / args.log_interval, acc_iter)
                     running_loss = 0.0
+                    running_acc = 0.0
+                    running_iter = 0
                     
         lr_scheduler.step()
+
+        avg_loss = epoch_train_loss / epoch_batch
+        avg_acc = epoch_train_acc / epoch_iter
         print(f"Epoch {epoch + 1} Training Ended.")
-        print(f"Epoch train loss: {epoch_train_loss / epoch_batch}, eBatch: {epoch_batch}, current data #: {num_data}")
-        writer.add_scalar("training_loss_epoch", epoch_train_loss / epoch_batch, epoch)
+        print(f"Epoch train loss: {avg_loss}, train accuracy: {avg_acc}, eBatch: {epoch_batch}, current data #: {epoch_iter}")
+        writer.add_scalar("training_loss_epoch", avg_loss, epoch)
+        writer.add_scalar("training_accuracy_epoch", avg_acc, epoch)
         print(f"Total data #: {acc_iter}, # iBatch: {acc_batch}")
         # print(f"Last training loss: {running_loss / (args.log_interval if iter % args.log_interval == 0 else (iter % args.log_interval))}")
         save_dict = {
@@ -591,27 +629,39 @@ if __name__ == "__main__":
             "scheduler_state": lr_scheduler.state_dict(),
             "args": args.__dict__,
             "epochs": epoch,
+            "num_iterations": epoch_iter,
             "num_batches": epoch_batch,
+            "avg_loss": avg_loss,
+            "avg_accuracy": avg_acc,
         }
         torch.save(save_dict, f"subtask_out/checkpoints/{args.exp_name}/{args.exp_name}_epoch_{epoch}.pt")
     
         # Validation
         model.eval()
         running_vloss = 0.0
+        running_vacc = 0.0
+        running_viter = 0
+        epoch_val_loss = 0.0
+        epoch_val_acc = 0.0
+        vepoch_iter = 0
         vepoch_batch = 0
         with tqdm(val_data_loader, unit=" batch") as vepoch:
             vepoch.set_description_str(f'Epoch {epoch + 1}]')
             prev_actions = torch.zeros((args.batch_size + 1)).long()
-            if args.semmap:
+            if args.semantic_map or args.semantic_map_with_inventory:
                 acc_unshuffle_semmap.zero_()
                 acc_walkthrough_semmap.zero_()
             with torch.no_grad():
                 for vbatch, worker_id in vepoch:
                     vepoch_batch += 1
+                    acc_val_batch += 1
 
                     vmodel_inputs = {}
                     # Previous action is same with the batch["expert_subtask_action"][1:, -2].
                     bsize = vbatch["masks"].shape[0]
+                    vepoch_iter += bsize
+                    acc_val_iter += bsize
+                    running_viter += bsize
                     prev_actions[0] = prev_actions[-1]
                     prev_actions[1:bsize+1] = vbatch["expert_subtask_action"][:, -2]
                     vmodel_inputs["prev_actions"] = prev_actions[:bsize].to(device)
@@ -631,7 +681,7 @@ if __name__ == "__main__":
                     # Preprocessing for Semantic 3D Mapping
                     unshuffle_semmap = None
                     walkthrough_semmap = None
-                    if args.semantic_map:
+                    if args.semantic_map or args.semantic_map_with_inventory:
                         unshuffle_semmap = []
                         walkthrough_semmap = []
 
@@ -677,7 +727,7 @@ if __name__ == "__main__":
                     vmodel_inputs["walkthrough_semmap"] = walkthrough_semmap
 
                     # Inventory Vector
-                    if args.inventory:
+                    if args.inventory or args.semantic_map_with_inventory:
                         vmodel_inputs["inventory"] = vbatch["inventory"].to(device)
                     
                     # Data for Subtask/Action Histories
@@ -689,13 +739,36 @@ if __name__ == "__main__":
                     vloss = loss_fn(voutput, vlabels)
 
                     running_vloss += vloss.item()
+                    epoch_val_loss += vloss.item()
+                    vpred_labels = torch.argmax(voutput, axis=1)
+                    val_acc = (vpred_labels == vlabels).sum()
+                    epoch_val_acc += val_acc.item()
+                    running_vacc += val_acc.item()
 
-                    vepoch.set_description_str(f'Epoch {epoch + 1}] Validation Loss: {vloss.item():.04f}')
+                    vepoch.set_description_str(f'Epoch {epoch + 1}] Validation Loss: {vloss.item():.04f} | Validation Accuracy: {(val_acc.item() / bsize):.04f}')
+                    if vepoch_batch % int(args.log_interval / (args.batch_size / 64) / 4) == 0:
+                        writer.add_scalar("validation_loss_iter", running_vloss / (args.log_interval / 4), acc_val_iter)
+                        writer.add_scalar("validation_accuracy_iter", (running_vacc / running_viter) / (args.log_interval / 4), acc_val_iter)
+                        running_vloss = 0.0
+                        running_vacc = 0.0
+                        running_viter = 0
 
-            avg_vloss = running_vloss / vepoch_batch
+            avg_vloss = epoch_val_loss / vepoch_batch
+            avg_vacc = epoch_val_acc / vepoch_iter
             print(f"Epoch {epoch + 1} Validation Ended.")
-            print(f"Epoch validation loss: {avg_vloss}, vbatch: {vepoch_batch}")
+            print(f"Epoch validation loss: {avg_vloss}, validation accuracy: {avg_vacc}, vbatch: {vepoch_batch}")
             writer.add_scalar("validation_loss_epoch", avg_vloss, epoch)
+            writer.add_scalar("validation_accuracy_epoch", avg_vacc, epoch)
+            writer.add_scalars(
+                "Training vs. Validation Loss",
+                {"Training": avg_loss, "Validation": avg_vloss},
+                epoch,
+            )
+            writer.add_scalars(
+                "Training vs. Validation Accuracy",
+                {"Training": avg_acc, "Validation": avg_vacc},
+                epoch,
+            )
 
             writer.flush()
             
