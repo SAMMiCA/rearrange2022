@@ -2306,7 +2306,7 @@ class OnePhaseSubtaskAwarePolicy(ActorCriticModel):
         extras = {}
         
         if torch.is_grad_enabled():
-            if subtask_logits is not None:
+            if subtask_logits is not None or len(subtask_logits) > 0:
                 extras["subtask_logits"] = torch.stack(subtask_logits)  # [nsteps, nsamplers, NUM_SUBTASKS]
             self.repeat_count += 1
         
