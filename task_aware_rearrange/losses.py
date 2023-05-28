@@ -12,10 +12,6 @@ from allenact.base_abstractions.distributions import CategoricalDistr, Condition
 from allenact.base_abstractions.sensor import AbstractExpertSensor
 from allenact.base_abstractions.misc import ActorCriticOutput
 
-from custom.constants import IDX_TO_OBJECT_TYPE, NUM_OBJECT_TYPES, OBJECT_TYPES_TO_IDX, UNKNOWN_OBJECT_STR
-from custom.subtask import IDX_TO_SUBTASK_TYPE, INTERACT_SUBTASK_TYPES, MAP_TYPES, MAP_TYPES_TO_IDX, SUBTASK_TYPES, SUBTASK_TYPES_TO_IDX
-from example_utils import ForkedPdb
-
 
 class SubtaskPredictionLoss(AbstractActorCriticLoss):
 

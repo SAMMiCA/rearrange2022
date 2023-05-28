@@ -16,7 +16,6 @@ from allenact.base_abstractions.experiment_config import (
     MachineParams,
     split_processes_onto_devices,
 )
-from allenact.embodiedai.sensors.vision_sensors import IMAGENET_RGB_MEANS, IMAGENET_RGB_STDS
 from allenact.embodiedai.preprocessors.resnet import ResNetPreprocessor
 from allenact.utils.experiment_utils import LinearDecay, PipelineStage, Builder
 from allenact.utils.system import get_logger
@@ -24,16 +23,14 @@ from allenact.utils.misc_utils import partition_sequence, md5_hash_str_as_int
 
 import datagen.datagen_utils as datagen_utils
 from baseline_configs.rearrange_base import RearrangeBaseExperimentConfig
-from rearrange.constants import OPENABLE_OBJECTS, PICKUPABLE_OBJECTS
-from rearrange.sensors import DepthRearrangeSensor, RGBRearrangeSensor, InWalkthroughPhaseSensor, UnshuffledRGBRearrangeSensor
-from task_aware_rearrange.sensors import PoseSensor, SemanticSegmentationSensor, UnshuffledDepthRearrangeSensor, UnshuffledPoseSensor, UnshuffledSemanticSegmentationSensor
 from task_aware_rearrange.utils import get_open_x_displays
+from task_aware_rearrange.constants import ORDERED_OBJECT_TYPES
 
 
 class TaskAwareBaseExperimentConfig(RearrangeBaseExperimentConfig):
 
     CNN_PREPROCESSOR_TYPE_AND_PRETRAINING = ("RN50", "clip")
-    ORDERED_OBJECT_TYPES = list(sorted(PICKUPABLE_OBJECTS + OPENABLE_OBJECTS))
+    ORDERED_OBJECT_TYPES = ORDERED_OBJECT_TYPES
 
     # Sensor Info
     REQUIRE_SEMANTIC_SEGMENTATION = False
@@ -52,7 +49,7 @@ class TaskAwareBaseExperimentConfig(RearrangeBaseExperimentConfig):
     INVENTORY_UUID = "inventory"
     SEMANTIC_MAP_UUID = "semmap"
     UNSHUFFLED_SEMANTIC_MAP_UUID = "unshuffled_semmap"
-
+    
     # Model parameters
     PREV_ACTION_EMBEDDING_DIM: int = 32
     RNN_TYPE: str = "LSTM"
@@ -76,97 +73,7 @@ class TaskAwareBaseExperimentConfig(RearrangeBaseExperimentConfig):
 
     @classmethod
     def sensors(cls) -> Sequence[Sensor]:
-        mean, stdev = None, None
-        if cls.CNN_PREPROCESSOR_TYPE_AND_PRETRAINING is not None:
-            cnn_type, pretraining_type = cls.CNN_PREPROCESSOR_TYPE_AND_PRETRAINING
-            if pretraining_type.strip().lower() == "clip":
-                from allenact_plugins.clip_plugin.clip_preprocessors import (
-                    ClipResNetPreprocessor,
-                )
-
-                mean = ClipResNetPreprocessor.CLIP_RGB_MEANS
-                stdev = ClipResNetPreprocessor.CLIP_RGB_STDS
-            else:
-                mean = IMAGENET_RGB_MEANS
-                stdev = IMAGENET_RGB_STDS
-
-        sensors = [
-            RGBRearrangeSensor(
-                height=cls.SCREEN_SIZE,
-                width=cls.SCREEN_SIZE,
-                use_resnet_normalization=True,
-                uuid=cls.EGOCENTRIC_RGB_UUID,
-                mean=mean,
-                stdev=stdev,
-            ),
-            UnshuffledRGBRearrangeSensor(
-                height=cls.SCREEN_SIZE,
-                width=cls.SCREEN_SIZE,
-                use_resnet_normalization=True,
-                uuid=cls.UNSHUFFLED_RGB_UUID,
-                mean=mean,
-                stdev=stdev,
-            ),
-            DepthRearrangeSensor(
-                height=cls.SCREEN_SIZE,
-                width=cls.SCREEN_SIZE,
-                uuid=cls.DEPTH_UUID,
-                use_normalization=cls.DEPTH_NORMALIZATION,
-            ),
-            UnshuffledDepthRearrangeSensor(
-                height=cls.SCREEN_SIZE,
-                width=cls.SCREEN_SIZE,
-                uuid=cls.UNSHUFFLED_DEPTH_UUID,
-                use_normalization=cls.DEPTH_NORMALIZATION,
-            ),
-            PoseSensor(
-                reference_pose=cls.REFERENCE_POSE,
-                uuid=cls.POSE_UUID,
-            ),
-            UnshuffledPoseSensor(
-                reference_pose=cls.REFERENCE_POSE,
-                uuid=cls.UNSHUFFLED_POSE_UUID,
-            ),
-        ]
-
-        if cls.REQUIRE_SEMANTIC_SEGMENTATION:
-            if cls.REFERENCE_SEGMENTATION:
-                sensors.append(
-                    SemanticSegmentationSensor(
-                        ordered_object_types=cls.ORDERED_OBJECT_TYPES,
-                        height=cls.SCREEN_SIZE,
-                        width=cls.SCREEN_SIZE,
-                        uuid=cls.SEMANTIC_SEGMENTATION_UUID,
-                    )
-                )
-                sensors.append(
-                    UnshuffledSemanticSegmentationSensor(
-                        ordered_object_types=cls.ORDERED_OBJECT_TYPES,
-                        height=cls.SCREEN_SIZE,
-                        width=cls.SCREEN_SIZE,
-                        uuid=cls.UNSHUFFLED_SEMANTIC_SEGMENTATION_UUID,
-                    )
-                )
-            else:
-                # add raw rgb sensors to infer semantic segmentation masks
-                sensors.append(
-                    RGBRearrangeSensor(
-                        height=cls.SCREEN_SIZE,
-                        width=cls.SCREEN_SIZE,
-                        use_resnet_normalization=False,
-                        uuid=cls.EGOCENTRIC_RAW_RGB_UUID,
-                    )
-                )
-                sensors.append(
-                    UnshuffledRGBRearrangeSensor(
-                        height=cls.SCREEN_SIZE,
-                        width=cls.SCREEN_SIZE,
-                        use_resnet_normalization=False,
-                        uuid=cls.UNSHUFFLED_RAW_RGB_UUID,
-                    )
-                )
-        
-        return sensors
+        return cls.SENSORS
 
     @classmethod
     def create_resnet_bulder(
@@ -234,9 +141,7 @@ class TaskAwareBaseExperimentConfig(RearrangeBaseExperimentConfig):
         return preprocessors
 
     @classmethod
-    def create_preprocessor_graph(cls, mode: str) -> SensorPreprocessorGraph:
-        additional_output_uuids = []
-
+    def create_preprocessor_graph(cls, mode: str, additional_output_uuids: Sequence[str] = []) -> SensorPreprocessorGraph:
         return (
             None
             if len(cls.preprocessors()) == 0

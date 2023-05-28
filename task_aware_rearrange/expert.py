@@ -31,7 +31,6 @@ from rearrange.environment import RearrangeMode, RearrangeTHOREnvironment
 from rearrange.expert import ShortestPathNavigatorTHOR
 from rearrange.tasks import AbstractRearrangeTask, UnshuffleTask, WalkthroughTask
 from rearrange.constants import PICKUPABLE_OBJECTS, OPENABLE_OBJECTS, STEP_SIZE
-from example_utils import ForkedPdb
 from task_aware_rearrange.subtasks import NUM_SUBTASKS, SUBTASK_TO_IDX, Subtask
 
 

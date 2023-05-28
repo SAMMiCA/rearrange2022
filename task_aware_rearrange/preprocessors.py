@@ -1,3 +1,4 @@
+from collections import OrderedDict
 from typing import List, Callable, Optional, Any, cast, Dict, Sequence
 
 import os
@@ -7,12 +8,17 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision.transforms as transforms
 from torchvision import models
 
 from allenact.base_abstractions.preprocessor import Preprocessor, SensorPreprocessorGraph
 from allenact.embodiedai.preprocessors.resnet import ResNetEmbedder
 from allenact.utils.misc_utils import prepare_locals_for_super
 from allenact.utils import spaces_utils as su
+
+from detectron2 import model_zoo
+from detectron2.engine.defaults import DefaultPredictor
+
 from baseline_configs.rearrange_base import RearrangeBaseExperimentConfig
 from task_aware_rearrange.subtasks import NUM_SUBTASKS
 from task_aware_rearrange.voxel_utils import GridParameters, image_to_semantic_maps
