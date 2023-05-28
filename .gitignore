@@ -162,3 +162,5 @@ custom/hlsm/models/
 
 subtask_out*
 misc/
+*_data
+*.pth

@@ -1,5 +1,5 @@
 from collections import OrderedDict
-from typing import List, Callable, Optional, Any, cast, Dict, Sequence
+from typing import List, Callable, Optional, Any, cast, Dict, Sequence, Tuple
 
 import os
 import gym
@@ -129,16 +129,25 @@ class Semantic3DMapPreprocessor(Preprocessor):
         input_uuids: List[str],
         output_uuid: str,
         fov: int,
+        # ordered_object_types: Sequence[str],
+        # class_to_color: Dict[str, Tuple[int, ...]],
+        # class_mapping: List[int],
+        num_semantic_classes: int,
+        num_additional_channels: int = 3,
         grid_parameters: GridParameters = GridParameters(),
-        ordered_object_types: Sequence[str] = None,
         device: Optional[torch.device] = None,
         device_ids: Optional[List[torch.device]] = None,
     ):
         self.fov = fov
         self.grid_parameters = grid_parameters
-        self.ordered_object_types = list(ordered_object_types)
-        assert self.ordered_object_types == sorted(self.ordered_object_types)
-        self.num_objects = len(self.ordered_object_types) + 1
+        # self.ordered_object_types = ordered_object_types
+        
+        # assert self.ordered_object_types == sorted(self.ordered_object_types)
+        # self.class_to_color = class_to_color
+        # self.class_mapping = class_mapping
+        # self.num_objects = len(self.ordered_object_types) + 1
+        self.num_semantic_classes = num_semantic_classes
+        self.num_additional_channels = num_additional_channels
 
         self.device = torch.device("cpu") if device is None else device
         self.device_ids = device_ids or cast(
@@ -154,7 +163,8 @@ class Semantic3DMapPreprocessor(Preprocessor):
         h = int(self.grid_parameters.GRID_SIZE_Z / self.grid_parameters.GRID_RES)
 
         return gym.spaces.Box(
-            low=0, high=1, dtype=np.bool, shape=(self.num_objects + 3, w, l, h),
+            low=0, high=1, dtype=np.bool, 
+            shape=(self.num_semantic_classes + self.num_additional_channels, w, l, h),
         )
 
     def to(self, device: torch.device) -> "Semantic3DMapPreprocessor":
@@ -167,7 +177,12 @@ class Semantic3DMapPreprocessor(Preprocessor):
         *args: Any,
         **kwargs: Any,
     ) -> Any:
-        scene_image = obs[self.input_uuids[0]].to(self.device)  # B x C x H x W
+        # scene_image = obs[self.input_uuids[0]].to(self.device)  # B x C x H x W
+        # obs[self.input_uuids[0]]: B x H x W x 1 LongTensor
+        scene_image = torch.as_tensor(obs[self.input_uuids[0]], device=self.device)[..., 0]
+        scene_image = F.one_hot(
+            scene_image, num_classes=self.num_semantic_classes
+        ).permute(0, 3, 1, 2)  # B x C x H x W
         depth_image = obs[self.input_uuids[1]].to(self.device).permute(0, 3, 1, 2)  # B x 1 x H x W
         extrinsics4f = obs[self.input_uuids[2]]["T_world_to_cam"].to(self.device) # B x 1 x 4 x 4
         agent_pos = obs[self.input_uuids[2]]["agent_pos"].to(self.device)

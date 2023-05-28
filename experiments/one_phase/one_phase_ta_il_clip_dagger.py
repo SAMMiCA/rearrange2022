@@ -9,7 +9,7 @@ from task_aware_rearrange.models import OnePhaseResNetActorCriticRNN
 class OnePhaseTaskAwareRearrangeILClipDaggerExperimentConfig(OnePhaseTaskAwareRearrangeILBaseExperimentConfig):
     
     CNN_PREPROCESSOR_TYPE_AND_PRETRAINING = ("RN50", "clip")
-    IL_PIPELINE_TYPE: Optional[str] = "10proc"
+    IL_PIPELINE_TYPE: Optional[str] = "2proc"
 
     @classmethod
     def create_model(cls, **kwargs) -> nn.Module:

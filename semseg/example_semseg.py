@@ -7,7 +7,8 @@ import cv2
 import numpy as np
 import torch
 from allenact.utils.tensor_utils import batch_observations
-from semseg.semseg_config import SemSegConfig
+# from semseg.semseg_config import SemSegConfig
+from experiments.one_phase.ablation_001 import OnePhaseAblation001ExerimentConfig as Config
 from semseg.semseg_sensors import SemanticRearrangeSensor
 from semseg.semseg_preprocessors import SemanticPreprocessor
 from rearrange.tasks import UnshuffleTask, WalkthroughTask
@@ -24,7 +25,7 @@ import detectron2.utils.visualizer as visualizer
 
 def test_sensor_preprocessor(stage: str = "train", verbose: bool = False):
     # Test for sensors & preprocessors
-    task_sampler_params = SemSegConfig.stagewise_task_sampler_args(
+    task_sampler_params = Config.stagewise_task_sampler_args(
         stage=stage, process_ind=0, total_processes=1, devices=[0],
     )
     task_sampler_params["thor_controller_kwargs"].update(
@@ -35,26 +36,30 @@ def test_sensor_preprocessor(stage: str = "train", verbose: bool = False):
     )
     task_sampler_params["sensors"].append(
         SemanticRearrangeSensor(
-            ordered_object_types=SemSegConfig.ORDERED_OBJECT_TYPES,
-            class_to_color=SemSegConfig.CLASS_TO_COLOR,
-            height=SemSegConfig.SCREEN_SIZE,
-            width=SemSegConfig.SCREEN_SIZE,
+            ordered_object_types=Config.ORDERED_OBJECT_TYPES,
+            class_to_color=Config.CLASS_TO_COLOR,
+            height=Config.SCREEN_SIZE,
+            width=Config.SCREEN_SIZE,
             uuid="gt_semantic",
         )
     )
-    task_sampler = SemSegConfig.make_sampler_fn(
+    task_sampler = Config.make_sampler_fn(
         **task_sampler_params,
         force_cache_reset=True,
         epochs=1,
-        only_one_unshuffle_per_walkthrough=True,
+        # only_one_unshuffle_per_walkthrough=True,
     )
 
-    sensor_preprocessor_graph = SemSegConfig.create_preprocessor_graph(
+    sensor_preprocessor_graph = Config.create_preprocessor_graph(
         mode=stage, additional_output_uuids="gt_semantic"
-    )().to(torch.device(0))
+    ).to(torch.device(0))
+    print(sensor_preprocessor_graph.compute_order)
 
     task = task_sampler.next_task()
-    assert isinstance(task, WalkthroughTask)
+    if Config.__name__.startswith("TwoPhase"):
+        assert isinstance(task, WalkthroughTask)
+    else:
+        assert isinstance(task, UnshuffleTask)
 
     obs = task.get_observations()
 
@@ -73,7 +78,7 @@ def test_sensor_preprocessor(stage: str = "train", verbose: bool = False):
                         f'    KEY [{k1}] | TYPE [{type(v1)}] | SHAPE [{v1.shape if hasattr(v1, "shape") else None}]'
                         + (f' | DEVICE [{v.device}]' if hasattr(v, "device") else '')
                     )
-
+    import pdb; pdb.set_trace()
     batch = batch_observations([obs], device=torch.device(0))
     if verbose:
         print('[ batch ]')
@@ -90,7 +95,7 @@ def test_sensor_preprocessor(stage: str = "train", verbose: bool = False):
                         f'    KEY [{k1}] | TYPE [{type(v1)}] | SHAPE [{v1.shape if hasattr(v1, "shape") else None}]'
                         + (f' | DEVICE [{v.device}]' if hasattr(v, "device") else '')
                     )
-
+    import pdb; pdb.set_trace()
     preprocessed_obs = sensor_preprocessor_graph.get_observations(batch)
     if verbose:
         print("[ preprocessed obs ]")
@@ -170,7 +175,7 @@ def test_visualization(
             class_to_color=class2color,
             class_mapping=ID_MAP_COLOR_CLASS_TO_ORDERED_OBJECT_TYPE,
             detection_threshold=0.8,
-            model_weight_path=SemSegConfig.SEMANTIC_SEGMENTATION_MODEL_WEIGHT_PATH,
+            model_weight_path=Config.SEMANTIC_SEGMENTATION_MODEL_WEIGHT_PATH,
             device=torch.device(0)
         )
 
@@ -217,7 +222,8 @@ def test_visualization(
 if __name__ == "__main__":
     stage = "train"
 
-    test_visualization(
-        file_path=os.path.join(SEMSEG_DATA_DIR, stage, "annotations", "0000000.json"),
-        stage=stage
-    )
+    # test_visualization(
+    #     file_path=os.path.join(SEMSEG_DATA_DIR, stage, "annotations", "0000000.json"),
+    #     stage=stage
+    # )
+    test_sensor_preprocessor(verbose=True)
