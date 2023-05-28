@@ -2159,8 +2159,8 @@ class OnePhaseSubtaskAwarePolicy(ActorCriticModel):
             w_sem_map_prev = memory.tensor('sem_map')[:, MAP_TYPE_TO_IDX["Walkthrough"]]
             
             map_masks = masks.view(*masks.shape[:2], 1, 1, 1, 1)
-            sem_maps = observations[self.sem_map_uuid]
-            w_sem_maps = observations[self.unshuffled_sem_map_uuid]
+            sem_maps = observations[self.semantic_map_uuid]
+            w_sem_maps = observations[self.unshuffled_semantic_map_uuid]
             
         
         if self.sap_subtask_history:
