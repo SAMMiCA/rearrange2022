@@ -299,9 +299,9 @@ class OnePhaseAblationExerimentConfig(OnePhaseTaskAwareRearrangeILBaseExperiment
             prev_action_embedding_dim=cls.PREV_ACTION_EMBEDDING_DIM,
             sap_subtask_history=cls.SAP_SUBTASK_HISTORY,
             sap_semantic_map=cls.SAP_SEMANTIC_MAP,
-            semantic_map_uuid=cls.SEMANTIC_SEGMENTATION_UUID
+            semantic_map_uuid=cls.SEMANTIC_MAP_UUID
             if cls.SAP_SEMANTIC_MAP else None,
-            unshuffled_semantic_map_uuid=cls.UNSHUFFLED_SEMANTIC_SEGMENTATION_UUID
+            unshuffled_semantic_map_uuid=cls.UNSHUFFLED_SEMANTIC_MAP_UUID
             if cls.SAP_SEMANTIC_MAP else None,
             num_map_channels=cls.NUM_MAP_CHANNELS
             if cls.SAP_SEMANTIC_MAP else None,

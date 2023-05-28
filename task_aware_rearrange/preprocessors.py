@@ -163,7 +163,7 @@ class Semantic3DMapPreprocessor(Preprocessor):
         h = int(self.grid_parameters.GRID_SIZE_Z / self.grid_parameters.GRID_RES)
 
         return gym.spaces.Box(
-            low=0, high=1, dtype=np.bool, 
+            low=0, high=1, dtype=bool, 
             shape=(self.num_semantic_classes + self.num_additional_channels, w, l, h),
         )
 

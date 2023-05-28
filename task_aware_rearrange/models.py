@@ -2222,7 +2222,7 @@ class OnePhaseSubtaskAwarePolicy(ActorCriticModel):
         rnn_hidden_states = memory.tensor("rnn")
         rnn_outs = []
         
-        subtask_logits = None
+        subtask_logits = []
         for step in range(nsteps):
             if self.sap_semantic_map:
                 sem_map_prev = update_semantic_map(
@@ -2263,23 +2263,24 @@ class OnePhaseSubtaskAwarePolicy(ActorCriticModel):
                     subtask_logits.append(subtask_logprob)
                 else:
                     assert nsteps == 1
-                    history = memory.tensor('agent_history')
-                    history_ = torch.clone(history)
-                    
-                    if (
-                        len(self.subtask_history) == 0
-                        or len(self.subtask_history)!= nsamplers
-                    ):
-                        self.subtask_history = [[] for _ in range(nsamplers)]
-                    
-                    for sampler in range(nsamplers):
-                        history_[sampler, 0, nonzero_idxs[sampler, 0]] = subtask_index[sampler] + 1
-                        self.subtask_history[sampler].append(subtask_index[sampler].item())
+                    if self.sap_subtask_history:
+                        history = memory.tensor('agent_history')
+                        history_ = torch.clone(history)
                         
-                    memory = memory.set_tensor(
-                        key="agent_history",
-                        tensor=history_,
-                    )
+                        if (
+                            len(self.subtask_history) == 0
+                            or len(self.subtask_history)!= nsamplers
+                        ):
+                            self.subtask_history = [[] for _ in range(nsamplers)]
+                        
+                        for sampler in range(nsamplers):
+                            history_[sampler, 0, nonzero_idxs[sampler, 0]] = subtask_index[sampler] + 1
+                            self.subtask_history[sampler].append(subtask_index[sampler].item())
+                            
+                        memory = memory.set_tensor(
+                            key="agent_history",
+                            tensor=history_,
+                        )
             
             rnn_input = [
                 ego_img_embeddings[step],
