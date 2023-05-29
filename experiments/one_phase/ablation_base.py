@@ -29,7 +29,7 @@ from semseg.semseg_constants import CLASS_TO_COLOR_ORIGINAL, ORDERED_CLASS_TO_CO
 class OnePhaseAblationExerimentConfig(OnePhaseTaskAwareRearrangeILBaseExperimentConfig):
     
     TRAINING_STEPS = int(25e6)
-    SAVE_INTERVAL = int(1e6)
+    SAVE_INTERVAL = int(5e5)
     CNN_PREPROCESSOR_TYPE_AND_PRETRAINING = ("RN50", "clip")
     IL_PIPELINE_TYPE: Optional[str] = "10proc"
     
