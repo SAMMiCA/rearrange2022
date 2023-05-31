@@ -1,4 +1,4 @@
-from typing import Optional, Union
+from typing import Optional, Union, Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -18,13 +18,13 @@ class EgocentricViewEncoderPooled(nn.Module):
     ):
         super().__init__()
         self.encoder = nn.Sequential(
-            nn.Conv2d(3 * img_embedding_dim, hidden_dim, 1, ),
+            nn.Conv2d(img_embedding_dim, hidden_dim, 1, ),
             nn.ReLU(inplace=True),
         )
 
         attention_dim = int(hidden_dim / 4)
         self.attention = nn.Sequential(
-            nn.Conv2d(3 * img_embedding_dim, attention_dim, 1, ),
+            nn.Conv2d(img_embedding_dim, attention_dim, 1, ),
             nn.ReLU(inplace=True),
             nn.Conv2d(attention_dim, 1, 1, ),
         )
@@ -33,28 +33,36 @@ class EgocentricViewEncoderPooled(nn.Module):
         self.hidden_dim = hidden_dim
 
     def forward(
-        self, 
-        u_img_emb: torch.Tensor,
-        w_img_emb: torch.Tensor,
+        self,
+        x: Optional[torch.Tensor] = None,
+        **kwargs: Any,
     ):
-        concat_img = torch.cat(
-            (
-                u_img_emb,
-                w_img_emb,
-                u_img_emb * w_img_emb,
-            ),
-            dim=-3,
+        assert x is not None or (
+            "u_img_emb" in kwargs and "w_img_emb" in kwargs
         )
-        bs, fs = concat_img.shape[:-3], concat_img.shape[-3:]
-        concat_img_reshaped = concat_img.view(-1, *fs)
-        attention_logits = self.attention(concat_img_reshaped)
-        attention_probs = torch.softmax(
-            attention_logits.view(concat_img_reshaped.shape[0], -1),
+        if "u_img_emb" in kwargs and "w_img_emb" in kwargs:
+            u_img_emb = kwargs["u_img_emb"]
+            w_img_emb = kwargs["w_img_emb"]
+            x = torch.cat(
+                (
+                    u_img_emb,
+                    w_img_emb,
+                    u_img_emb * w_img_emb,
+                ),
+                dim=-3,
+            )
+        assert x.shape[-3] == self.img_embedding_dim
+        
+        bs, fs = x.shape[:-3], x.shape[-3:]
+        x_reshaped = x.view(-1, *fs)
+        attention_logits = self.attention(x_reshaped)
+        attentionn_probs = torch.softmax(
+            attention_logits.view(x_reshaped.shape[0], -1),
             dim=-1,
-        ).view(concat_img_reshaped.shape[0], 1, *concat_img_reshaped.shape[-2:])
-
-        ego_img_pooled = (self.encoder(concat_img_reshaped) * attention_probs).mean(-1).mean(-1)
-
+        ).view(x_reshaped.shape[0], 1, *x_reshaped.shape[-2:])
+        
+        ego_img_pooled = (self.encoder(x_reshaped) * attentionn_probs).mean(-1).mean(-1)
+        
         return ego_img_pooled.view(*bs, -1)
 
 

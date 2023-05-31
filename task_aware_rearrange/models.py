@@ -1,4 +1,5 @@
 from typing import (
+    Mapping,
     Optional,
     Tuple,
     Sequence,
@@ -1999,7 +2000,7 @@ class OnePhaseSubtaskAwarePolicy(ActorCriticModel):
         sap_input_size = 0
         osp_input_size = 0
         self.visual_encoder = EgocentricViewEncoderPooled(
-            img_embedding_dim=self.observation_space[self.rgb_uuid].shape[0],
+            img_embedding_dim=(3 * self.observation_space[self.rgb_uuid].shape[0]),
             hidden_dim=self._hidden_size,
         )
         sap_input_size += hidden_size
@@ -2329,3 +2330,300 @@ class OnePhaseSubtaskAwarePolicy(ActorCriticModel):
             ),
             memory
         )
+
+
+class TwoPhaseSubtaskAwarePolicy(ActorCriticModel):
+    
+    def __init__(
+        self,
+        action_space: gym.Space,
+        observation_space: gym.spaces.Dict,
+        rgb_uuid: str,
+        expert_subtask_uuid: str,
+        done_action_index: int,
+        in_walkthrough_phase_uuid: str,
+        is_walkthrough_phase_embedding_dim: int = 32,
+        prev_action_embedding_dim: int = 32,
+        sap_subtask_history: bool = False,
+        sap_semantic_map: bool = False,
+        semantic_map_uuid: Optional[str] = None,
+        num_map_channels: Optional[int] = None,
+        online_subtask_prediction: bool = False,
+        osp_egoview: bool = False,
+        osp_prev_action: bool = False,
+        osp_walkthrough_phase: bool = False,
+        osp_subtask_history: bool = False,
+        osp_semantic_map: bool = False,
+        num_repeats: Optional[int] = None,
+        num_subtask_types: int = NUM_SUBTASK_TYPES,
+        num_subtask_arguments: int = NUM_SUBTASK_TARGET_OBJECTS,
+        num_subtasks: int = NUM_SUBTASKS,
+        walkthrougher_should_ignore_action_mask: Optional[Sequence[float]] = None,
+        hidden_size: int = 512,
+        num_rnn_layers: int = 1,
+        rnn_type: str = "LSTM",
+    ):
+        super().__init__(action_space=action_space, observation_space=observation_space)
+        self._hidden_size = hidden_size
+        self.prev_action_embedding_dim = prev_action_embedding_dim
+        
+        self.done_action_index = done_action_index
+        self.in_walkthrough_phase_uuid = in_walkthrough_phase_uuid
+        self.is_walkthrough_phase_embedding_dim = is_walkthrough_phase_embedding_dim
+        self.walkthrougher_should_ignore_action_mask = walkthrougher_should_ignore_action_mask
+        
+        self.rgb_uuid = rgb_uuid
+        self.rnn_type = rnn_type
+        self.num_rnn_layers = num_rnn_layers
+        
+        self.expert_subtask_uuid = expert_subtask_uuid
+        
+        self.online_subtask_prediction = online_subtask_prediction
+        self.osp_egoview = osp_egoview if self.online_subtask_prediction else False
+        self.osp_prev_action = osp_prev_action if self.online_subtask_prediction else False
+        self.osp_subtask_history = osp_subtask_history if self.online_subtask_prediction else False
+        self.osp_semantic_map = osp_semantic_map if self.online_subtask_prediction else False
+        self.osp_walkthrough_phase = osp_walkthrough_phase if self.online_subtask_prediction else False
+        
+        sap_input_size = 0
+        osp_input_size = 0
+        self.visual_encoder = EgocentricViewEncoderPooled(
+            img_embedding_dim=self.observation_space[self.rgb_uuid].shape[0],
+            hidden_dim=self._hidden_size,
+        )
+        sap_input_size += hidden_size
+        if self.online_subtask_prediction and self.osp_egoview:
+            osp_input_size += hidden_size
+        
+        self.prev_action_embedder = nn.Embedding(
+            self.action_space.n + 1, embedding_dim=self.prev_action_embedding_dim
+        )
+        sap_input_size += self.prev_action_embedding_dim
+        if self.online_subtask_prediction and self.osp_prev_action:
+            osp_input_size += self.prev_action_embedding_dim
+            
+        self.is_walkthrough_phase_embedder = nn.Embedding(
+            num_embeddings=2, embedding_dim=is_walkthrough_phase_embedding_dim
+        )
+        sap_input_size += is_walkthrough_phase_embedding_dim
+        if self.online_subtask_prediction and self.osp_walkthrough_phase:
+            osp_input_size += is_walkthrough_phase_embedding_dim
+        
+        self.walkthrough_good_action_logits: Optional[torch.Tensor]
+        if walkthrougher_should_ignore_action_mask is not None:
+            self.register_buffer(
+                "walkthrough_good_action_logits",
+                -1000 * torch.FloatTensor(walkthrougher_should_ignore_action_mask),
+                persistent=False,
+            )
+        else:
+            self.walkthrough_good_action_logits = None
+        
+        self.sap_subtask_history = sap_subtask_history if self.online_subtask_prediction else False
+        self.sap_semantic_map = sap_semantic_map
+        
+        if self.sap_semantic_map:
+            assert (
+                semantic_map_uuid is not None
+                and num_map_channels is not None
+            ), \
+                f"semantic_map_uuid: {semantic_map_uuid} num_map_channels: {num_map_channels}"
+            self.semantic_map_uuid = semantic_map_uuid
+            self.num_map_channels = num_map_channels
+            self.semantic_map_encoder = SemanticMap2DEncoderPooled(
+                n_map_channels=self.num_map_channels,
+                hidden_size=self._hidden_size,
+            )
+            sap_input_size += hidden_size
+            if self.online_subtask_prediction and self.osp_semantic_map:
+                osp_input_size += hidden_size
+            
+        if self.sap_subtask_history:
+            self.subtask_history_encoder = SubtaskHistoryEncoder(
+                hidden_size=hidden_size,
+                num_subtasks=num_subtasks,
+            )
+            sap_input_size += hidden_size
+            if self.online_subtask_prediction and self.osp_subtask_history:
+                osp_input_size += hidden_size
+        
+        if self.online_subtask_prediction:
+            self.online_subtask_predictor = SubtaskPredictor(
+                input_size=osp_input_size,
+                hidden_size=hidden_size,
+                num_subtasks=num_subtasks
+            )
+        
+        self.state_encoder = RNNStateEncoder(
+            input_size=sap_input_size,
+            hidden_size=self._hidden_size,
+            num_layers=self.num_rnn_layers,
+            rnn_type=self.rnn_type,
+        )
+        
+        self.walkthrough_encoder = RNNStateEncoder(
+            self._hidden_size, self._hidden_size, numlayers=1, rnn_type=self.rnn_type,
+        )
+        
+        self.walkthrough_actor = LinearActorHead(self._hidden_size, action_space.n)
+        self.walkthrough_actor.linear.bias.data[self.done_action_index] -= 3    # give a bias to the done action
+        self.walkthrough_critic = LinearCriticHead(self._hidden_size)
+        self.unshuffle_actor = LinearActorHead(self._hidden_size, action_space.n)
+        self.unshuffle_critic = LinearCriticHead(self._hidden_size)
+        
+        self.subtask_history = []
+        self.action_history = []
+        self.repeat_count = 0
+        self.num_repeats = num_repeats
+        
+        self.train()
+        
+    def load_state_dict(self, state_dict: Union[Dict[str, Tensor], Dict[str, Tensor]], strict: bool = True):
+        for key in list(state_dict.keys()):
+            if "explore" in key:
+                new_key = key.replace("explore", "walkthrough")
+                assert new_key not in state_dict
+                state_dict[new_key] = state_dict[key]
+                del state_dict[key]
+
+        if "walkthrough_good_action_logits" in state_dict:
+            del state_dict["walkthrough_good_action_logits"]
+            
+        return super(TwoPhaseSubtaskAwarePolicy, self).load_state_dict(state_dict, strict)
+    
+    @property
+    def num_recurrent_layers(self) -> int:
+        return self.state_encoder.num_recurrent_layers
+    
+    @property
+    def recurrent_hidden_state_size(self) -> int:
+        return self._hidden_size
+    
+    @property
+    def map_size(self):
+        if self.semantic_map_uuid is not None:
+            self._map_size = self.observation_space[self.semantic_map_uuid].shape[-4:]
+            return self._map_size
+        else:
+            return None
+
+    @property
+    def map_channel(self):
+        if self.map_size is not None:
+            return self.map_size[0]
+        return None
+
+    @property
+    def map_width(self):
+        if self.map_size is not None:
+            return self.map_size[1]
+        return None
+
+    @property
+    def map_length(self):
+        if self.map_size is not None:
+            return self.map_size[2]
+        return None
+
+    @property
+    def map_height(self):
+        if self.map_size is not None:
+            return self.map_size[3]
+        return None
+    
+    def _recurrent_memory_specification(self) -> Optional[FullMemorySpecType]:
+        memory_spec_dict = dict(
+            rnn=(
+                (
+                    ("layer", self.num_recurrent_layers),
+                    ("sampler", None),
+                    ("hidden", self.recurrent_hidden_state_size),
+                ),
+                torch.float32,
+            ),
+            walkthrough_encoding=(
+                (
+                    ("layer", self.walkthrough_encoder.num_recurrent_layers),
+                    ("sampler", None),
+                    ("hidden", self.recurrent_hidden_state_size),
+                )
+            )
+        )
+        if self.sap_semantic_map:
+            assert (
+                self.map_channel is not None
+                and self.map_width is not None
+                and self.map_length is not None
+                and self.map_height is not None
+            )
+            memory_spec_dict["sem_map"] = (
+                (
+                    ("sampler", None),
+                    ("map_type", 2),
+                    ("channels", self.map_channel),
+                    ("width", self.map_width),
+                    ("length", self.map_length),
+                    ("height", self.map_height),
+                ),
+                torch.bool,
+            )
+        if self.sap_subtask_history:
+            memory_spec_dict["agent_history"] = (
+                (
+                    ("sampler", None),
+                    ("history", 2),     # 0 for subtask, 1 for prev_action
+                    ("length", 512),    # history vector length (max_steps // num_mini_batch + 1)
+                ),
+                torch.long,
+            )
+        return memory_spec_dict
+        
+    def forward(
+        self,
+        observations: ObservationType, 
+        memory: Memory, 
+        prev_actions: ActionType, 
+        masks: torch.FloatTensor
+    ) -> Tuple[ActorCriticOutput[DistributionType], Optional[Memory]]:
+        """
+        observations: [steps, samplers, (agents), ...]
+        memory: [sampler, ...] 
+        prev_actions: [steps, samplers, ...]
+        masks: [steps, samplers, agents, 1], zero indicates the steps where a new episode/task starts
+        """
+        in_walkthrough_phase_mask = observations[self.in_walkthrough_phase_uuid]
+        in_unshuffle_phase_mask = ~in_walkthrough_phase_mask
+        in_walkthrough_float = in_walkthrough_phase_mask.float()
+        in_unshuffle_float = in_unshuffle_phase_mask.float()
+        
+        # Don't reset hidden state at the start of the unshuffle task
+        masks_no_unshuffle_reset = (masks.bool() | in_unshuffle_phase_mask).float()
+        
+        nsteps, nsamplers = masks.shape[:2]
+        
+        # Egocentric Image
+        ego_image = observations[self.rgb_uuid]
+        ego_img_embeddings = self.visual_encoder(ego_image)     # [steps, samplers, vis_feat_embedding_dim]
+        
+        # Previous actions (low-level actions)
+        prev_action_embeddings = self.prev_action_embedder(
+            (
+                (~masks_no_unshuffle_reset.bool()).long()
+                * (prev_actions.unsqueeze(-1) + 1)
+            )
+        ).squeeze(-2)   # [steps, samplers, prev_action_embedding_dim]
+        
+        # Is Walkthrough Phase
+        is_walkthrough_phase_embeddings = self.is_walkthrough_phase_embedder(
+            in_walkthrough_phase_mask.long()
+        ).squeeze(-2)   # [steps, samplers, is_walkthrough_phase_embedding_dim]
+        
+        from example_utils import ForkedPdb; ForkedPdb().set_trace()
+        if self.sap_semantic_map:
+            # Semantic maps: (sampler, channels, width, length, height)
+            sem_map_prev = memory.tensor('sem_map')[:, MAP_TYPE_TO_IDX["Unshuffle"]]
+            w_sem_map_prev = memory.tensor('sem_map')[:, MAP_TYPE_TO_IDX["Walkthrough"]]
+            
+            map_masks = masks.view(*masks.shape[:2], 1, 1, 1, 1)
+            sem_maps = observations[self.semantic_map_uuid]
+            w_sem_maps = observations[self.unshuffled_semantic_map_uuid]
