@@ -51,6 +51,7 @@ class PoseSensor(Sensor[IThorEnvironment, Task[IThorEnvironment]]):
         self.reference_pose = reference_pose
         self.T_u2w = None
         self.latest_pose = None
+        self.cur_step = 0
 
         super().__init__(**prepare_locals_for_super(locals()))
 
@@ -144,7 +145,7 @@ class PoseSensor(Sensor[IThorEnvironment, Task[IThorEnvironment]]):
                 self.T_u2w = T_t2w @ T_u2t
 
             elif task.actions_taken_success[-1]:
-                self.simulate_successful_nav_action(task.actions_taken[-1])
+                self.simulate_successful_nav_action(task)
 
         T_world_to_cam = self.get_pose_mat()
         agent_pos = self.get_agent_pos()
@@ -229,19 +230,23 @@ class PoseSensor(Sensor[IThorEnvironment, Task[IThorEnvironment]]):
 
     def simulate_successful_nav_action(
         self,
-        action: str,
+        task: Union[UnshuffleTask, WalkthroughTask],
     ):
         MOVE_STEP = 0.25
         PITCH_STEP = 30
         YAW_STEP = 90
+        
+        action = task.actions_taken[-1]
+        if self.cur_step >= len(task.actions_taken):
+            return
 
+        self.cur_step += 1
         latest_pose = copy.deepcopy(self.latest_pose)
         action_type = stringcase.pascalcase(action)
-        
         if action_type == "RotateLeft":
-            self.latest_pose["rot_3d_enu_deg"][2] = round_to_factor(latest_pose["rot_3d_enu_deg"][2] + YAW_STEP, self.base)
+            self.latest_pose["rot_3d_enu_deg"][2] = round_to_factor(latest_pose["rot_3d_enu_deg"][2] + YAW_STEP, self.base) % 360
         elif action_type == "RotateRight":
-            self.latest_pose["rot_3d_enu_deg"][2] = round_to_factor(latest_pose["rot_3d_enu_deg"][2] - YAW_STEP, self.base)
+            self.latest_pose["rot_3d_enu_deg"][2] = round_to_factor(latest_pose["rot_3d_enu_deg"][2] - YAW_STEP, self.base) % 360
         elif action_type == "LookDown":
             self.latest_pose["cam_horizon_deg"] = latest_pose["cam_horizon_deg"] + PITCH_STEP
         elif action_type == "LookUp":

@@ -122,6 +122,7 @@ class TwoPhaseTaskAwareRearrangeExperimentConfig(TaskAwareBaseExperimentConfig):
     EXPERT_SUBTASK_ACTION_UUID = "expert_subtask_action"
     EXPERT_ACTION_UUID = "expert_action"
     EXPERT_SUBTASK_UUID = "expert_subtask"
+    EXPERT_VERBOSE: bool = False
     
     SAP_SUBTASK_HISTORY: bool = False
     SAP_SEMANTIC_MAP: bool = False
@@ -213,7 +214,7 @@ class TwoPhaseTaskAwareRearrangeExperimentConfig(TaskAwareBaseExperimentConfig):
                     ),
                     uuid=cls.EXPERT_SUBTASK_ACTION_UUID,
                     use_expert_agent_for_walkthrough=(not cls.WALKTHROUGH_TRAINING_PPO),
-                    verbose=True,
+                    verbose=cls.EXPERT_VERBOSE,
                 ),
             )
         

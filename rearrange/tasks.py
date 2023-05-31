@@ -652,11 +652,26 @@ class WalkthroughTask(AbstractRearrangeTask):
         self.actions_taken_success.append(action_success)
 
         return RLStepResult(
-            observation=self.get_observations(),
+            # observation=self.get_observations(),
+            observation=None,
             reward=self._judge(action_name=action_name, action_success=action_success),
             done=self.is_done(),
             info={"action_name": action_name, "action_success": action_success},
         )
+        
+    def step(self, action: int) -> RLStepResult:
+        step_result = super().step(action=action)
+        # if self.greedy_expert is not None:
+        #     self.greedy_expert.update(
+        #         action_taken=action, action_success=step_result.info["action_success"]
+        #     )
+        step_result = RLStepResult(
+            observation=self.get_observations(),
+            reward=step_result.reward,
+            done=step_result.done,
+            info=step_result.info,
+        )
+        return step_result
 
 
 class RearrangeTaskSpecIterable:

@@ -144,7 +144,7 @@ class InWalkthroughPhaseSensor(
 ):
     def __init__(self, uuid: str = "in_walkthrough_phase", **kwargs: Any):
         observation_space = gym.spaces.Box(
-            low=False, high=True, shape=(1,), dtype=np.bool
+            low=False, high=True, shape=(1,), dtype=bool
         )
         super().__init__(**prepare_locals_for_super(locals()))
 
