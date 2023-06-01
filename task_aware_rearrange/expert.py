@@ -1595,7 +1595,10 @@ class SubtaskAndActionExpertSensor(AbstractExpertActionSensor):
             remaining_objects = [
                 obj["name"]
                 for obj in task.pickupable_or_openable_objects(visible_only=False)
-                if obj["name"] not in (task.seen_pickupable_objects | task.seen_openable_objects)
+                if (
+                    obj["name"] not in (task.seen_pickupable_objects | task.seen_openable_objects)
+                    and not obj["isBroken"]
+                )
             ]
             if self.verbose:
                 get_logger().info(
@@ -1608,7 +1611,10 @@ class SubtaskAndActionExpertSensor(AbstractExpertActionSensor):
             failed_places_and_min_dist = (float("inf"), float("inf"))
             obj_pose_to_go_to = None
             for obj in remaining_objects:
-                if self.object_name_to_priority[obj] < self.max_priority_per_object:
+                if (
+                    self.object_name_to_priority[obj] <= self.max_priority_per_object
+                    and obj in env.obj_name_to_walkthrough_start_pose
+                ):
                     priority = self.object_name_to_priority[obj]
                     priority_and_dist_to_object = (
                         priority,

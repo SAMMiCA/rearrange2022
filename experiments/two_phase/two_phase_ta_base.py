@@ -14,7 +14,6 @@ from allenact.utils.misc_utils import all_unique
 from rearrange.sensors import DepthRearrangeSensor, RGBRearrangeSensor, InWalkthroughPhaseSensor, ClosestUnshuffledRGBRearrangeSensor
 from rearrange.tasks import RearrangeTaskSampler
 from rearrange_constants import ABS_PATH_OF_REARRANGE_TOP_LEVEL_DIR
-from rearrange.losses import MaskedPPO
 from experiments.ta_base import TaskAwareBaseExperimentConfig
 from semseg.semseg_preprocessors import SemanticPreprocessor
 from task_aware_rearrange.constants import NUM_OBJECT_TYPES, ADDITIONAL_MAP_CHANNELS
@@ -26,6 +25,7 @@ from semseg.semseg_constants import CLASS_TO_COLOR_ORIGINAL, ORDERED_CLASS_TO_CO
 from task_aware_rearrange.subtasks import NUM_SUBTASKS
 from task_aware_rearrange.voxel_utils import GridParameters
 from task_aware_rearrange.expert import SubtaskAndActionExpertSensor
+from task_aware_rearrange.losses import TaskAwareMaskedPPO
 
 
 class StepwiseLinearDecay:
@@ -376,7 +376,7 @@ class TwoPhaseTaskAwareRearrangeExperimentConfig(TaskAwareBaseExperimentConfig):
     def create_model(cls, **kwargs) -> nn.Module:
         
         def get_sensor_uuid(stype: Type[Sensor]) -> Optional[str]:
-            s = next((s for s in cls.SENSORS if isinstance(s, stype)), None,)
+            s = next((s for s in cls.sensors() if isinstance(s, stype)), None,)
             return None if s is None else s.uuid
 
         walkthrougher_should_ignore_action_mask = [
@@ -410,6 +410,7 @@ class TwoPhaseTaskAwareRearrangeExperimentConfig(TaskAwareBaseExperimentConfig):
             walkthrougher_should_ignore_action_mask=walkthrougher_should_ignore_action_mask,
             hidden_size=cls.HIDDEN_SIZE,
             num_rnn_layers=cls.NUM_RNN_LAYERS,
+            num_steps=cls.training_pipeline().training_settings.num_steps,
             rnn_type=cls.RNN_TYPE,
         )
 
@@ -490,7 +491,7 @@ class TwoPhaseTaskAwareRearrangeExperimentConfig(TaskAwareBaseExperimentConfig):
                 imitation_loss=Imitation(),
             )
             if cls.WALKTHROUGH_TRAINING_PPO:
-                named_losses["walkthrough_ppo_loss"] = MaskedPPO(
+                named_losses["walkthrough_ppo_loss"] = TaskAwareMaskedPPO(
                     mask_uuid="in_walkthrough_phase",
                     ppo_params=dict(
                         clip_decay=LinearDecay(training_steps), **PPOConfig

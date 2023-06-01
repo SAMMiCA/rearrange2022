@@ -3,19 +3,32 @@ from allenact_plugins.ithor_plugin.ithor_sensors import RelativePositionChangeTH
 
 
 class TwoPhaseTestConfig(TwoPhaseTaskAwareRearrangeExperimentConfig):
-    IL_PIPELINE_TYPE = "1proc"
-    WALKTHROUGH_TRAINING_PPO = False
+    IL_PIPELINE_TYPE = "3proc"
+    WALKTHROUGH_TRAINING_PPO = True
     # HEADLESS = False
-    RGB_NORMALIZATION = False
+    RGB_NORMALIZATION = True
     EXPERT_VERBOSE = False
     
+    SAP_SUBTASK_HISTORY = True
+    SAP_SEMANTIC_MAP = True
+    REQUIRE_SEMANTIC_SEGMENTATION = True
+    
+    ONLINE_SUBTASK_PREDICTION = True
+    ONLINE_SUBTASK_PREDICTION_USE_EGOVIEW = False
+    ONLINE_SUBTASK_PREDICTION_USE_PREV_ACTION = False
+    ONLINE_SUBTASK_PREDICTION_USE_IS_WALKTHROUGH_PHASE = True
+    ONLINE_SUBTASK_PREDICTION_USE_SEMANTIC_MAP = True
+    ONLINE_SUBTASK_PREDICTION_USE_SUBTASK_HISTORY = True
+    
     @classmethod
-    def sensors(cls):
-        sensors = super().sensors()
-        sensors.append(
-            RelativePositionChangeTHORSensor(
-                uuid="test_pos",
-            )
-        )
-        
-        return sensors
+    def tag(cls) -> str:
+        return "TwoPhaseTest"
+    
+    @classmethod
+    def num_valid_processes(cls) -> int:
+        return 1
+    
+    @classmethod
+    def num_test_processes(cls) -> int:
+        return 1
+    

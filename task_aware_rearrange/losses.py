@@ -11,6 +11,7 @@ from allenact.algorithms.onpolicy_sync.policy import ObservationType
 from allenact.base_abstractions.distributions import CategoricalDistr, ConditionalDistr
 from allenact.base_abstractions.sensor import AbstractExpertSensor
 from allenact.base_abstractions.misc import ActorCriticOutput
+from rearrange.losses import MaskedPPO
 
 
 class SubtaskPredictionLoss(AbstractActorCriticLoss):
@@ -45,4 +46,44 @@ class SubtaskPredictionLoss(AbstractActorCriticLoss):
         return (
             loss,
             {"subtask_ce": loss.item()},
+        )
+
+
+class TaskAwareMaskedPPO(MaskedPPO):
+
+    def loss(
+        self,
+        step_count: int,
+        batch: ObservationType,
+        actor_critic_output: ActorCriticOutput[CategoricalDistr],
+        *args,
+        **kwargs,
+    ):
+        mask = batch["observations"][self.mask_uuid].float()
+        denominator = mask.sum().item()
+
+        losses_per_step, _ = self._ppo_loss.loss_per_step(
+            step_count=step_count, batch=batch, actor_critic_output=actor_critic_output,
+        )
+        losses = {
+            key: ((loss * mask).sum() / max(denominator, 1), weight)
+            for (key, (loss, weight)) in losses_per_step.items()
+        }
+
+        total_loss = sum(
+            loss * weight if weight is not None else loss
+            for loss, weight in losses.values()
+        )
+
+        if denominator == 0:
+            losses_to_record = {}
+        else:
+            losses_to_record = {
+                "ppo_total": cast(torch.Tensor, total_loss).item(),
+                **{key: loss.item() for key, (loss, _) in losses.items()}
+            }
+
+        return (
+            total_loss,
+            losses_to_record,
         )

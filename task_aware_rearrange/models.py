@@ -2342,6 +2342,7 @@ class TwoPhaseSubtaskAwarePolicy(ActorCriticModel):
         expert_subtask_uuid: str,
         done_action_index: int,
         in_walkthrough_phase_uuid: str,
+        num_steps: int,
         is_walkthrough_phase_embedding_dim: int = 32,
         prev_action_embedding_dim: int = 32,
         sap_subtask_history: bool = False,
@@ -2375,6 +2376,7 @@ class TwoPhaseSubtaskAwarePolicy(ActorCriticModel):
         self.rgb_uuid = rgb_uuid
         self.rnn_type = rnn_type
         self.num_rnn_layers = num_rnn_layers
+        self.num_steps = num_steps
         
         self.expert_subtask_uuid = expert_subtask_uuid
         
@@ -2406,8 +2408,10 @@ class TwoPhaseSubtaskAwarePolicy(ActorCriticModel):
             num_embeddings=2, embedding_dim=is_walkthrough_phase_embedding_dim
         )
         sap_input_size += is_walkthrough_phase_embedding_dim
+        sap_input_size += hidden_size
         if self.online_subtask_prediction and self.osp_walkthrough_phase:
             osp_input_size += is_walkthrough_phase_embedding_dim
+            osp_input_size += hidden_size
         
         self.walkthrough_good_action_logits: Optional[torch.Tensor]
         if walkthrougher_should_ignore_action_mask is not None:
@@ -2462,7 +2466,7 @@ class TwoPhaseSubtaskAwarePolicy(ActorCriticModel):
         )
         
         self.walkthrough_encoder = RNNStateEncoder(
-            self._hidden_size, self._hidden_size, numlayers=1, rnn_type=self.rnn_type,
+            self._hidden_size, self._hidden_size, num_layers=1, rnn_type="GRU",
         )
         
         self.walkthrough_actor = LinearActorHead(self._hidden_size, action_space.n)
@@ -2471,8 +2475,7 @@ class TwoPhaseSubtaskAwarePolicy(ActorCriticModel):
         self.unshuffle_actor = LinearActorHead(self._hidden_size, action_space.n)
         self.unshuffle_critic = LinearCriticHead(self._hidden_size)
         
-        self.subtask_history = []
-        self.action_history = []
+        self.subtask_history = [[]]
         self.repeat_count = 0
         self.num_repeats = num_repeats
         
@@ -2491,6 +2494,10 @@ class TwoPhaseSubtaskAwarePolicy(ActorCriticModel):
             
         return super(TwoPhaseSubtaskAwarePolicy, self).load_state_dict(state_dict, strict)
     
+    def _reset_history(self, nsamplers: int):
+        self.subtask_history = [[] for _ in range(nsamplers)]
+        self.repeat_count = 0
+
     @property
     def num_recurrent_layers(self) -> int:
         return self.state_encoder.num_recurrent_layers
@@ -2546,7 +2553,8 @@ class TwoPhaseSubtaskAwarePolicy(ActorCriticModel):
                     ("layer", self.walkthrough_encoder.num_recurrent_layers),
                     ("sampler", None),
                     ("hidden", self.recurrent_hidden_state_size),
-                )
+                ),
+                torch.float32,
             )
         )
         if self.sap_semantic_map:
@@ -2556,7 +2564,7 @@ class TwoPhaseSubtaskAwarePolicy(ActorCriticModel):
                 and self.map_length is not None
                 and self.map_height is not None
             )
-            memory_spec_dict["sem_map"] = (
+            memory_spec_dict["semmap"] = (
                 (
                     ("sampler", None),
                     ("map_type", 2),
@@ -2572,7 +2580,7 @@ class TwoPhaseSubtaskAwarePolicy(ActorCriticModel):
                 (
                     ("sampler", None),
                     ("history", 2),     # 0 for subtask, 1 for prev_action
-                    ("length", 512),    # history vector length (max_steps // num_mini_batch + 1)
+                    ("length", 500),    # history vector length (max_steps // num_mini_batch + 1)
                 ),
                 torch.long,
             )
@@ -2587,10 +2595,35 @@ class TwoPhaseSubtaskAwarePolicy(ActorCriticModel):
     ) -> Tuple[ActorCriticOutput[DistributionType], Optional[Memory]]:
         """
         observations: [steps, samplers, (agents), ...]
+            self.rgb_uuid ("rgb_resnet" or "rgb")
+                torch.float32,  [nsteps, nsamplers, egoview_feat_dim, height / 32, width / 32]
+            self.depth_uuid ("depth")
+                torch.float32,  [nsteps, nsamplers, height, width, 1]
+            self.in_walkthrough_phase_uuid ("in_walkthrough_phase")
+                torch.bool,     [nsteps, nsamplers, 1]
+            self.expert_subtask_uuid ("expert_subtask")
+                torch.int64,    [nsteps, nsamplers, 2]
+            self.expert_action_uuid ("expert_action")
+                torch.int64,    [nsteps, nsamplers, 2]
+            self.semantic_map_uuid ("semmap")
+                torch.bool,     [nsteps, nsamplers, map_channels, map_width, map_length, map_height]
+                
         memory: [sampler, ...] 
-        prev_actions: [steps, samplers, ...]
-        masks: [steps, samplers, agents, 1], zero indicates the steps where a new episode/task starts
+            "rnn"       for hidden_states of state_encoder
+                torch.float32,  [nlayers, nsamplers, _hidden_size]
+            "walkthrough_encoding"      for hidden_states of walkthrough_encoder
+                torch.float32,  [nlayers, nsamplers, _hidden_size]
+            "sem_map"   for storing semantic map in walkthrough env (0) and unshuffle env (1)
+                torch.bool,     [nsamplers, nenvs, map_channels, map_width, map_length, map_height]
+            "agent_history"     for storing agent's history of inferred subtasks (0) & took actions (1)
+                torch.int64,    [nsamplers, 2, buffer_length]
+        prev_actions:       action_index
+            torch.int64,    [steps, samplers]
+            
+        masks: [steps, samplers, 1], zero indicates the steps where a new episode/task starts
+            torch.float32,  [nsteps, nsamplers, 1]
         """
+        nsteps, nsamplers = masks.shape[:2]
         in_walkthrough_phase_mask = observations[self.in_walkthrough_phase_uuid]
         in_unshuffle_phase_mask = ~in_walkthrough_phase_mask
         in_walkthrough_float = in_walkthrough_phase_mask.float()
@@ -2598,32 +2631,260 @@ class TwoPhaseSubtaskAwarePolicy(ActorCriticModel):
         
         # Don't reset hidden state at the start of the unshuffle task
         masks_no_unshuffle_reset = (masks.bool() | in_unshuffle_phase_mask).float()
-        
-        nsteps, nsamplers = masks.shape[:2]
+
+            
+        # masks.bool() is True during episode except the start of the episode
+        # in_unshuffle_phase_mask is True when the episode is in the unshuffle phase
+        # Thus, masks_no_unshuffle_reset is only False at the start of the walkthrough phase
+        masks_with_unshuffle_reset = masks.float()
+        del masks
         
         # Egocentric Image
         ego_image = observations[self.rgb_uuid]
-        ego_img_embeddings = self.visual_encoder(ego_image)     # [steps, samplers, vis_feat_embedding_dim]
+        ego_img_embeddings = self.visual_encoder(ego_image)     # [steps, samplers, _hidden_size]
         
         # Previous actions (low-level actions)
+        masked_prev_actions = (
+            (masks_with_unshuffle_reset.bool()).long()
+            * (prev_actions.unsqueeze(-1) + 1)
+        )   # [steps, samplers, 1]
         prev_action_embeddings = self.prev_action_embedder(
-            (
-                (~masks_no_unshuffle_reset.bool()).long()
-                * (prev_actions.unsqueeze(-1) + 1)
-            )
+            masked_prev_actions
         ).squeeze(-2)   # [steps, samplers, prev_action_embedding_dim]
         
         # Is Walkthrough Phase
         is_walkthrough_phase_embeddings = self.is_walkthrough_phase_embedder(
             in_walkthrough_phase_mask.long()
         ).squeeze(-2)   # [steps, samplers, is_walkthrough_phase_embedding_dim]
+        walkthrough_encoding = memory.tensor("walkthrough_encoding")
         
-        from example_utils import ForkedPdb; ForkedPdb().set_trace()
+        # RNN hidden states
+        rnn_hidden_states = memory.tensor("rnn")
+        
+        rnn_output_list = []
+        
         if self.sap_semantic_map:
             # Semantic maps: (sampler, channels, width, length, height)
-            sem_map_prev = memory.tensor('sem_map')[:, MAP_TYPE_TO_IDX["Unshuffle"]]
-            w_sem_map_prev = memory.tensor('sem_map')[:, MAP_TYPE_TO_IDX["Walkthrough"]]
+            w_semmap_prev = memory.tensor('semmap')[:, MAP_TYPE_TO_IDX["Walkthrough"]]
+            u_semmap_prev = memory.tensor('semmap')[:, MAP_TYPE_TO_IDX["Unshuffle"]]
             
-            map_masks = masks.view(*masks.shape[:2], 1, 1, 1, 1)
-            sem_maps = observations[self.semantic_map_uuid]
-            w_sem_maps = observations[self.unshuffled_semantic_map_uuid]
+            map_masks = masks_no_unshuffle_reset.view(nsteps, nsamplers, 1, 1, 1, 1)
+            in_walkthrough_map_masks = in_walkthrough_float.view(nsteps, nsamplers, 1, 1, 1, 1)
+            in_unshuffle_map_masks = in_unshuffle_float.view(nsteps, nsamplers, 1, 1, 1, 1)
+            
+            semmaps = observations[self.semantic_map_uuid]
+            w_semmaps = (semmaps * in_walkthrough_map_masks).bool()
+            u_semmaps = (semmaps * in_unshuffle_map_masks).bool()
+                
+        if self.sap_subtask_history:
+            history = memory.tensor('agent_history')        # (nsamplers, 2, buffer_length)
+            
+            history_masks = masks_with_unshuffle_reset.view(nsteps, nsamplers, 1, 1)
+            in_walkthrough_history_masks = in_walkthrough_float.view(nsteps, nsamplers, 1, 1)
+            in_unshuffle_history_masks = in_unshuffle_float.view(nsteps, nsamplers, 1, 1)
+            
+            # Reset the agent history if the task is started at step 0
+            history = (history * history_masks[0].bool()).long()
+            
+            nonzero_idxs = []
+            for i in range(nsamplers):
+                idxs = []
+                for j in range(2):
+                    idxs.append((history[i, j] == 0).nonzero().min())
+                idxs = torch.stack(idxs)
+                nonzero_idxs.append(idxs)
+            nonzero_idxs = torch.stack(nonzero_idxs)
+            
+            subtask_history_embeddings = []
+            for sampler in range(nsamplers):
+                subtask_history = history[sampler, 0, :(nonzero_idxs[sampler, 0])] - 1
+                if not torch.is_grad_enabled():
+                    # Update action history based on the prev_actions
+                    history[
+                        sampler,
+                        1,
+                        nonzero_idxs[sampler, 1] : nonzero_idxs[sampler, 1] + nsteps
+                    ] = masked_prev_actions[:, sampler]
+                    memory = memory.set_tensor("agent_history", history)
+                    
+                    seq_masks = torch.zeros_like(subtask_history)
+                else:
+                    # When the loss is updated
+                    # append agent history with rollout history
+                    assert (
+                        len(self.subtask_history[sampler]) == nsteps + 1 == self.num_steps + 1
+                    )
+                    seq_masks = torch.zeros_like(subtask_history)
+                    subtask_history = [
+                        subtask_history,
+                        subtask_history.new_tensor(self.subtask_history[sampler][:-1], dtype=torch.long)
+                    ]
+                    subtask_history = torch.cat(subtask_history, dim=-1)
+                    seq_masks = [
+                        seq_masks,
+                        history_masks[:, sampler].view(nsteps).type(seq_masks.dtype)
+                    ]
+                    seq_masks = torch.cat(seq_masks, dim=-1)
+                
+                sampler_subtask_history_embedding = self.subtask_history_encoder(
+                    subtask_index_history=subtask_history,
+                    seq_masks=seq_masks,
+                )       # [len(subtask_history) + 1, _hidden_size]
+                subtask_history_embeddings.append(
+                    sampler_subtask_history_embedding[-nsteps:]
+                )       # [nsteps, _hidden_size]
+            subtask_history_embeddings = torch.stack(
+                subtask_history_embeddings, dim=1
+            )   # [nsteps, nsamplers, _hidden_size]
+            
+        subtask_logits = [] if self.online_subtask_prediction else None
+        for step in range(nsteps):
+            if self.sap_semantic_map:
+                w_semmap_prev = update_semantic_map(
+                    sem_map=w_semmaps[step],
+                    sem_map_prev=w_semmap_prev,
+                    map_mask=map_masks[step],
+                )
+                u_semmap_prev = update_semantic_map(
+                    sem_map=u_semmaps[step],
+                    sem_map_prev=u_semmap_prev,
+                    map_mask=map_masks[step],
+                )
+                
+                # Update map for agent position
+                current_agent_map = semmaps[step, :, 0:1]
+                w_semmap_prev[:, 0:1] = current_agent_map
+                u_semmap_prev[:, 0:1] = current_agent_map
+                
+                semmaps_prev = torch.stack(
+                    (w_semmap_prev, u_semmap_prev), dim=1
+                )
+                
+                semantic_map_embedding = self.semantic_map_encoder(
+                    unshuffle_sem_map_data=u_semmap_prev.max(-1).values,
+                    walkthrough_sem_map_data=w_semmap_prev.max(-1).values,
+                )   # [nsampler, emb_feat_dims]
+            
+            if self.online_subtask_prediction:
+                online_subtask_prediction_inputs = []
+                if self.osp_egoview:
+                    online_subtask_prediction_inputs.append(ego_img_embeddings[step])
+                if self.osp_prev_action:
+                    online_subtask_prediction_inputs.append(prev_action_embeddings[step])
+                if self.osp_walkthrough_phase:
+                    online_subtask_prediction_inputs.append(is_walkthrough_phase_embeddings[step])
+                    online_subtask_prediction_inputs.append(
+                        walkthrough_encoding[0] * masks_no_unshuffle_reset[step],
+                    )
+                if self.sap_semantic_map and self.osp_semantic_map:
+                    online_subtask_prediction_inputs.append(semantic_map_embedding)
+                if self.sap_subtask_history and self.osp_subtask_history:
+                    online_subtask_prediction_inputs.append(subtask_history_embeddings[step])
+                
+                osp_inputs = torch.cat(online_subtask_prediction_inputs, dim=-1)
+                subtask_logprob = self.online_subtask_predictor(osp_inputs) # [nsamplers, NUM_SUBTASKS]
+                subtask_index = torch.max(subtask_logprob, dim=-1).indices  # [nsamplers, ]
+                # during the walkthrough task, we enforce the subtask to explore (0)
+                subtask_index = (
+                    subtask_index * in_unshuffle_phase_mask[step].squeeze(-1)
+                )
+                
+                if not torch.is_grad_enabled():
+                    if len(self.subtask_history) != nsamplers:
+                        self._reset_history(nsamplers=nsamplers)
+                    for sampler in range(nsamplers):
+                        history[sampler, 0, nonzero_idxs[sampler, 0]] = subtask_index[sampler] + 1
+                        self.subtask_history[sampler].append(
+                            subtask_index[sampler].item()
+                        )
+                    memory = memory.set_tensor("agent_history", history)
+                subtask_logits.append(subtask_logprob)
+
+            rnn_input = [
+                ego_img_embeddings[step],
+                prev_action_embeddings[step],
+                is_walkthrough_phase_embeddings[step],
+                walkthrough_encoding[0] * masks_no_unshuffle_reset[step],
+            ]
+            if self.sap_semantic_map:
+                rnn_input.append(semantic_map_embedding)
+            if self.sap_subtask_history:
+                rnn_input.append(subtask_history_embeddings[step])
+            
+            rnn_input = torch.cat(rnn_input, dim=-1).unsqueeze(0)
+            
+            rnn_out, rnn_hidden_states = self.state_encoder(
+                rnn_input,
+                rnn_hidden_states,
+                masks_no_unshuffle_reset[step : step + 1]
+            )
+            rnn_output_list.append(rnn_out)
+            
+            new_walkthrough_encoding, _ = self.walkthrough_encoder(
+                rnn_out,
+                walkthrough_encoding,
+                masks_no_unshuffle_reset[step : step + 1],
+            )
+            walkthrough_encoding = (
+                walkthrough_encoding * in_unshuffle_float[step : step + 1]
+                + new_walkthrough_encoding * in_walkthrough_float[step : step + 1]
+            )
+            
+        memory = memory.set_tensor("walkthrough_encoding", walkthrough_encoding)
+        memory = memory.set_tensor("rnn", rnn_hidden_states)
+        if self.sap_semantic_map:
+            memory = memory.set_tensor("semmap", semmaps_prev.type(torch.bool))
+        
+        rnn_out = torch.cat(rnn_output_list, dim=0)
+
+        extras = {}
+        if self.online_subtask_prediction:
+            if torch.is_grad_enabled():
+                assert len(subtask_logits) > 0
+                extras["subtask_logits"] = torch.stack(subtask_logits)  # [nsteps, nsamplers, NUM_SUBTASKS]
+                self.repeat_count += 1
+                if self.repeat_count == self.num_repeats:
+                    self._reset_history(nsamplers=nsamplers)
+
+        walkthrough_dist = self.walkthrough_actor(rnn_out)
+        walkthrough_vals = self.walkthrough_critic(rnn_out)
+        unshuffle_dist = self.unshuffle_actor(rnn_out)
+        unshuffle_vals = self.unshuffle_critic(rnn_out)
+        
+        assert len(in_walkthrough_float.shape) == len(walkthrough_dist.logits.shape)
+        
+        if self.walkthrough_good_action_logits is not None:
+            walkthrough_logits = (
+                walkthrough_dist.logits
+                + self.walkthrough_good_action_logits.view(
+                    *((1, ) * (len(walkthrough_dist.logits.shape) - 1)), -1
+                )
+            )
+        else:
+            walkthrough_logits = walkthrough_dist.logits
+            
+        actor = CategoricalDistr(
+            logits=(
+                in_walkthrough_float * walkthrough_logits
+                + in_unshuffle_float * unshuffle_dist.logits
+            )
+        )
+        values = (
+            in_walkthrough_float * walkthrough_vals
+            + in_unshuffle_float * unshuffle_vals
+        )
+        
+        return (
+            ActorCriticOutput(distributions=actor, values=values, extras=extras),
+            memory,
+        )
+        # test_logits = torch.rand_like(walkthrough_dist.logits)
+        # test_logits[..., 0] -= 3
+        # return (
+        #     ActorCriticOutput(
+        #         distributions=CategoricalDistr(logits=test_logits),
+        #         values=torch.rand_like(in_walkthrough_float),
+        #         extras=extras,
+        #     ),
+        #     memory
+        # )

@@ -39,8 +39,8 @@ INTERACT_SUBTASK_TYPES = [
 ]
 
 IDX_TO_MAP_TYPE = {
-    0: "Unshuffle",
-    1: "Walkthrough"
+    0: "Walkthrough",
+    1: "Unshuffle",
 }
 MAP_TYPE_TO_IDX = {v: k for k, v in IDX_TO_MAP_TYPE.items()}
 MAP_TYPES = [IDX_TO_MAP_TYPE[i] for i in range(len(IDX_TO_MAP_TYPE))]
