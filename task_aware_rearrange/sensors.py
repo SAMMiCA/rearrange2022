@@ -400,7 +400,7 @@ class UnshuffledPoseSensor(PoseSensor):
                 self.T_u2w = T_t2w @ T_u2t
 
             elif task.actions_taken_success[-1]:
-                self.simulate_successful_nav_action(task.actions_taken[-1])
+                self.simulate_successful_nav_action(task)
 
         T_world_to_cam = self.get_pose_mat()
         agent_pos = self.get_agent_pos()
