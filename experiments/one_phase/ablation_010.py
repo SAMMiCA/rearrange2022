@@ -11,9 +11,9 @@ class OnePhaseAblation008ExerimentConfig(OnePhaseAblationExerimentConfig):
     
     CNN_PREPROCESSOR_TYPE_AND_PRETRAINING = ("RN50", "clip")
     # IL_PIPELINE_TYPE: Optional[str] = "4proc"
-    PIPELINE_TYPE = "4proc-il"
+    PIPELINE_TYPE = "4proc-il-rl"
     IL_LOSS_WEIGHT = 1.0
-    RL_LOSS_WEIGHT = None
+    RL_LOSS_WEIGHT = 10.0
     
     SAVE_INTERVAL = int(2e5)
     

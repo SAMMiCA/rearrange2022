@@ -2,11 +2,13 @@ from experiments.two_phase.two_phase_ta_base import TwoPhaseTaskAwareRearrangeEx
 from allenact_plugins.ithor_plugin.ithor_sensors import RelativePositionChangeTHORSensor
 
 
-class TwoPhaseTestConfig(TwoPhaseTaskAwareRearrangeExperimentConfig):
-    PIPELINE_TYPE = "2proc-il-rl"
+class TwoPhaseExp001Config(TwoPhaseTaskAwareRearrangeExperimentConfig):
+    CNN_PREPROCESSOR_TYPE_AND_PRETRAINING = ("RN50", "clip")
+    PIPELINE_TYPE = "4proc-il"
     
+    SAVE_INTERVAL = int(2e5)
     IL_LOSS_WEIGHT = 1.0
-    RL_LOSS_WEIGHT = 10.0
+    # RL_LOSS_WEIGHT = 10.0
     
     WALKTHROUGH_TRAINING_PPO = True
     WALKTHROUGH_PPO_LOSS_WEIGHT = 10.0
@@ -28,7 +30,7 @@ class TwoPhaseTestConfig(TwoPhaseTaskAwareRearrangeExperimentConfig):
     
     @classmethod
     def tag(cls) -> str:
-        return "TwoPhaseTest"
+        return "TwoPhaseExp001"
     
     @classmethod
     def num_valid_processes(cls) -> int:

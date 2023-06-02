@@ -8,8 +8,8 @@ from allenact.base_abstractions.preprocessor import Preprocessor, SensorPreproce
 from allenact.embodiedai.sensors.vision_sensors import IMAGENET_RGB_MEANS, IMAGENET_RGB_STDS
 from allenact.algorithms.onpolicy_sync.losses.imitation import Imitation
 from allenact.utils.experiment_utils import LinearDecay, PipelineStage, Builder
+from allenact.algorithms.onpolicy_sync.losses.ppo import PPOConfig, PPO
 from baseline_configs.one_phase.one_phase_rgb_il_base import StepwiseLinearDecay
-
 from experiments.one_phase.one_phase_ta_il_base import OnePhaseTaskAwareRearrangeILBaseExperimentConfig
 from rearrange.sensors import DepthRearrangeSensor, RGBRearrangeSensor, InWalkthroughPhaseSensor, UnshuffledRGBRearrangeSensor
 from rearrange_constants import ABS_PATH_OF_REARRANGE_TOP_LEVEL_DIR
@@ -26,12 +26,43 @@ from semseg.semseg_preprocessors import SemanticPreprocessor
 from semseg.semseg_constants import CLASS_TO_COLOR_ORIGINAL, ORDERED_CLASS_TO_COLOR, ID_MAP_COLOR_CLASS_TO_ORDERED_OBJECT_TYPE
 
 
+def training_params(label: str, training_steps: int):
+    """
+    label: Nproc(-il)(-longtf)(-rl)
+    """
+    use_lr_decay = False
+
+    lr = 3e-4
+    num_train_processes = int(label.split('-')[0][:-4])
+    isIL = True if 'il' in label.split('-') else False
+    longtf = True if ('longtf' in label.split('-') and isIL) else False
+    num_steps = 64
+    dagger_steps = min(int(5e6), training_steps // 10) if longtf else min(int(1e6), training_steps // 10)
+    bc_tf1_steps = min(int(5e5), training_steps // 10) if longtf else min(int(1e5), training_steps // 10)
+    update_repeats = 3
+    num_mini_batch = 1
+
+    return dict(
+        lr=lr,
+        num_steps=num_steps,
+        num_mini_batch=num_mini_batch,
+        update_repeats=update_repeats,
+        use_lr_decay=use_lr_decay,
+        num_train_processes=num_train_processes,
+        dagger_steps=dagger_steps,
+        bc_tf1_steps=bc_tf1_steps,
+    )
+
+
 class OnePhaseAblationExerimentConfig(OnePhaseTaskAwareRearrangeILBaseExperimentConfig):
     
     TRAINING_STEPS = int(25e6)
     SAVE_INTERVAL = int(5e5)
     CNN_PREPROCESSOR_TYPE_AND_PRETRAINING = ("RN50", "clip")
-    IL_PIPELINE_TYPE: Optional[str] = "10proc"
+    PIPELINE_TYPE: Optional[str] = "10proc-il"      # Nproc(-il)(-longtf)(-rl)
+    
+    IL_LOSS_WEIGHT: Optional[float] = None
+    RL_LOSS_WEIGHT: Optional[float] = None
     
     SAP_SUBTASK_HISTORY: bool = False
     SAP_SEMANTIC_MAP: bool = False
@@ -73,6 +104,7 @@ class OnePhaseAblationExerimentConfig(OnePhaseTaskAwareRearrangeILBaseExperiment
     ONLINE_SUBTASK_PREDICTION_USE_PREV_ACTION: bool = False
     ONLINE_SUBTASK_PREDICTION_USE_SUBTASK_HISTORY: bool = False
     ONLINE_SUBTASK_PREDICTION_USE_SEMANTIC_MAP: bool = False
+    ONLINE_SUBTASK_LOSS_WEIGHT: Optional[float] = None
     
     @classmethod
     def sensors(cls) -> Sequence[Sensor]:
@@ -317,36 +349,104 @@ class OnePhaseAblationExerimentConfig(OnePhaseTaskAwareRearrangeILBaseExperiment
         )
         
     @classmethod
+    def _use_label_to_get_training_params(cls):
+        return training_params(
+            label=cls.PIPELINE_TYPE.lower(), training_steps=cls.TRAINING_STEPS
+        )
+        
+    @classmethod
     def _training_pipeline_info(cls, **kwargs) -> Dict[str, Any]:
         """Define how the model trains."""
+        assert cls.PIPELINE_TYPE is not None
         training_steps = cls.TRAINING_STEPS
         params = cls._use_label_to_get_training_params()
-        bc_tf1_steps = params["bc_tf1_steps"]
-        dagger_steps = params["dagger_steps"]
+        isIL = ('il' in cls.PIPELINE_TYPE.split('-'))
+        isRL = ('rl' in cls.PIPELINE_TYPE.split('-'))
+        bc_tf1_steps = params["bc_tf1_steps"] if isIL else 0
+        dagger_steps = params["dagger_steps"] if isIL else 0
         
-        named_losses = dict(
-            imitation_loss=Imitation(),
-        )
+        named_losses = {}
+        pipeline_stages: List[PipelineStage] = []
+        if isIL:
+            assert cls.IL_LOSS_WEIGHT is not None
+            named_losses["imitation_loss"] = Imitation()
+        
+        if isRL:
+            assert cls.RL_LOSS_WEIGHT is not None
+            named_losses["ppo_loss"] = PPO(
+                clip_decay=LinearDecay(
+                    training_steps - bc_tf1_steps - dagger_steps / 2
+                ),
+                **PPOConfig,
+            )
+        
         if cls.ONLINE_SUBTASK_PREDICTION:
+            assert cls.ONLINE_SUBTASK_LOSS_WEIGHT is not None
             named_losses["subtask_loss"] = SubtaskPredictionLoss(
                 subtask_expert_uuid=cls.EXPERT_SUBTASK_UUID,
                 subtask_logits_uuid="subtask_logits",
             )
+            
+        if isIL:
+            loss_names = ["imitation_loss"] + (
+                ["subtask_loss"] if cls.ONLINE_SUBTASK_PREDICTION else []
+            )
+            loss_weights = [cls.IL_LOSS_WEIGHT] + (
+                [cls.ONLINE_SUBTASK_LOSS_WEIGHT] if cls.ONLINE_SUBTASK_PREDICTION else []
+            )
+            max_stage_steps = training_steps if not isRL else (bc_tf1_steps + dagger_steps / 2)
+            cumm_steps_and_values = [
+                (bc_tf1_steps, 1.0), (bc_tf1_steps + dagger_steps, 0.0)
+            ] if not isRL else [
+                (bc_tf1_steps, 1.0), (bc_tf1_steps + dagger_steps / 2, 0.5)
+            ]
+            pipeline_stages.append(
+                PipelineStage(
+                    loss_names=loss_names,
+                    loss_weights=loss_weights,
+                    max_stage_steps=max_stage_steps,
+                    teacher_forcing=StepwiseLinearDecay(
+                        cumm_steps_and_values=cumm_steps_and_values
+                    ),
+                )
+            )
+            if isRL:
+                loss_names = ["imitation_loss", "ppo_loss"] + (
+                    ["subtask_loss"] if cls.ONLINE_SUBTASK_PREDICTION else []
+                )
+                loss_weights = [cls.IL_LOSS_WEIGHT, cls.RL_LOSS_WEIGHT] + (
+                    [cls.ONLINE_SUBTASK_LOSS_WEIGHT] if cls.ONLINE_SUBTASK_PREDICTION else []
+                )
+                pipeline_stages.append(
+                    PipelineStage(
+                        loss_names=loss_names,
+                        loss_weights=loss_weights,
+                        max_stage_steps=(dagger_steps / 2),
+                        teacher_forcing=StepwiseLinearDecay(
+                            cumm_steps_and_values=[(0, 0.5), (dagger_steps / 2, 0.0)]
+                        ),
+                    )
+                )
+                
+        if isRL:
+            loss_names = ["ppo_loss"] + (
+                ["subtask_loss"] if cls.ONLINE_SUBTASK_PREDICTION else []
+            )
+            loss_weights = [cls.RL_LOSS_WEIGHT] + (
+                [cls.ONLINE_SUBTASK_LOSS_WEIGHT] if cls.ONLINE_SUBTASK_PREDICTION else []
+            )
+            max_stage_steps = (training_steps - (bc_tf1_steps + dagger_steps))
+            pipeline_stages.append(
+                PipelineStage(
+                    loss_names=loss_names,
+                    loss_weights=loss_weights,
+                    max_stage_steps=max_stage_steps,
+                )
+            )
+        
 
         return dict(
             named_losses=named_losses,
-            pipeline_stages=[
-                PipelineStage(
-                    loss_names=list(named_losses.keys()),
-                    loss_weights=[1.0,] * len(named_losses),
-                    max_stage_steps=training_steps,
-                    teacher_forcing=StepwiseLinearDecay(
-                        cumm_steps_and_values=[
-                            (bc_tf1_steps, 1.0),
-                            (bc_tf1_steps + dagger_steps, 0.0),
-                        ]
-                    ),
-                )
-            ],
+            pipeline_stages=pipeline_stages,
             **params
         )

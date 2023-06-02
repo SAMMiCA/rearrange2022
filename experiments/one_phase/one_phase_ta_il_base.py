@@ -75,7 +75,7 @@ def il_training_params(label: str, training_steps: int):
     else:
         lr = 3e-4
         num_train_processes = int(label.split('-')[0][:-4])
-        longtf = True if len(label.split('-')) == 2 and label.split('-')[1] == "longtf" else False
+        longtf = True if 'longtf' in label.split('-') else False
         num_steps = 64
         dagger_steps = min(int(5e6), training_steps // 10) if longtf else min(int(1e6), training_steps // 10)
         bc_tf1_steps = min(int(5e5), training_steps // 10) if longtf else min(int(1e5), training_steps // 10)

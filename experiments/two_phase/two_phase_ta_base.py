@@ -8,7 +8,7 @@ from allenact.base_abstractions.preprocessor import Preprocessor, SensorPreproce
 from allenact.embodiedai.sensors.vision_sensors import DepthSensor
 from allenact.embodiedai.sensors.vision_sensors import IMAGENET_RGB_MEANS, IMAGENET_RGB_STDS
 from allenact.algorithms.onpolicy_sync.losses.imitation import Imitation
-from allenact.algorithms.onpolicy_sync.losses.ppo import PPOConfig
+from allenact.algorithms.onpolicy_sync.losses.ppo import PPOConfig, PPO
 from allenact.utils.experiment_utils import LinearDecay, PipelineStage, Builder
 from allenact.utils.misc_utils import all_unique
 from rearrange.sensors import DepthRearrangeSensor, RGBRearrangeSensor, InWalkthroughPhaseSensor, ClosestUnshuffledRGBRearrangeSensor
@@ -25,7 +25,7 @@ from semseg.semseg_constants import CLASS_TO_COLOR_ORIGINAL, ORDERED_CLASS_TO_CO
 from task_aware_rearrange.subtasks import NUM_SUBTASKS
 from task_aware_rearrange.voxel_utils import GridParameters
 from task_aware_rearrange.expert import SubtaskAndActionExpertSensor
-from task_aware_rearrange.losses import TaskAwareMaskedPPO
+from task_aware_rearrange.losses import TaskAwareMaskedPPO, TaskAwareReverselyMaskedPPO
 
 
 class StepwiseLinearDecay:
@@ -55,45 +55,21 @@ class StepwiseLinearDecay:
                     return p * v1 + (1 - p) * v0
 
 
-def il_training_params(label: str, training_steps: int):
+def training_params(label: str, training_steps: int):
+    """
+    label: Nproc(-il)(-longtf)(-rl)
+    """
     use_lr_decay = False
 
-    if label == "80proc":
-        lr = 3e-4
-        num_train_processes = 80
-        num_steps = 64
-        dagger_steps = min(int(1e6), training_steps // 10)
-        bc_tf1_steps = min(int(1e5), training_steps // 10)
-        update_repeats = 3
-        num_mini_batch = 2 if torch.cuda.is_available() else 1
-
-    elif label == "40proc":
-        lr = 3e-4
-        num_train_processes = 40
-        num_steps = 64
-        dagger_steps = min(int(1e6), training_steps // 10)
-        bc_tf1_steps = min(int(1e5), training_steps // 10)
-        update_repeats = 3
-        num_mini_batch = 1
-
-    elif label == "40proc-longtf":
-        lr = 3e-4
-        num_train_processes = 40
-        num_steps = 64
-        dagger_steps = min(int(5e6), training_steps // 10)
-        bc_tf1_steps = min(int(5e5), training_steps // 10)
-        update_repeats = 3
-        num_mini_batch = 1
-
-    else:
-        lr = 3e-4
-        num_train_processes = int(label.split('-')[0][:-4])
-        longtf = True if len(label.split('-')) == 2 and label.split('-')[1] == "longtf" else False
-        num_steps = 64
-        dagger_steps = min(int(5e6), training_steps // 10) if longtf else min(int(1e6), training_steps // 10)
-        bc_tf1_steps = min(int(5e5), training_steps // 10) if longtf else min(int(1e5), training_steps // 10)
-        update_repeats = 3
-        num_mini_batch = 1
+    lr = 3e-4
+    num_train_processes = int(label.split('-')[0][:-4])
+    isIL = True if 'il' in label.split('-') else False
+    longtf = True if ('longtf' in label.split('-') and isIL) else False
+    num_steps = 64
+    dagger_steps = min(int(5e6), training_steps // 10) if longtf else min(int(1e6), training_steps // 10)
+    bc_tf1_steps = min(int(5e5), training_steps // 10) if longtf else min(int(1e5), training_steps // 10)
+    update_repeats = 3
+    num_mini_batch = 1
 
     return dict(
         lr=lr,
@@ -107,7 +83,6 @@ def il_training_params(label: str, training_steps: int):
     )
 
 
-
 class TwoPhaseTaskAwareRearrangeExperimentConfig(TaskAwareBaseExperimentConfig):
     
     TRAIN_UNSHUFFLE_RUNS_PER_WALKTHROUGH: int = 1
@@ -117,8 +92,13 @@ class TwoPhaseTaskAwareRearrangeExperimentConfig(TaskAwareBaseExperimentConfig):
     SAVE_INTERVAL = int(5e5)
     CNN_PREPROCESSOR_TYPE_AND_PRETRAINING = ("RN50", "clip")
     
-    IL_PIPELINE_TYPE: Optional[str] = None
+    PIPELINE_TYPE: Optional[str] = None
+    IL_LOSS_WEIGHT: Optional[float] = None
+    RL_LOSS_WEIGHT: Optional[float] = None
+
     WALKTHROUGH_TRAINING_PPO: bool = True
+    WALKTHROUGH_PPO_LOSS_WEIGHT: Optional[float] = None
+
     EXPERT_SUBTASK_ACTION_UUID = "expert_subtask_action"
     EXPERT_ACTION_UUID = "expert_action"
     EXPERT_SUBTASK_UUID = "expert_subtask"
@@ -166,6 +146,7 @@ class TwoPhaseTaskAwareRearrangeExperimentConfig(TaskAwareBaseExperimentConfig):
     ONLINE_SUBTASK_PREDICTION_USE_IS_WALKTHROUGH_PHASE: bool = False
     ONLINE_SUBTASK_PREDICTION_USE_SUBTASK_HISTORY: bool = False
     ONLINE_SUBTASK_PREDICTION_USE_SEMANTIC_MAP: bool = False
+    ONLINE_SUBTASK_LOSS_WEIGHT: Optional[float] = None
     
     @classmethod
     def sensors(cls) -> Sequence[Sensor]:
@@ -205,7 +186,7 @@ class TwoPhaseTaskAwareRearrangeExperimentConfig(TaskAwareBaseExperimentConfig):
             InWalkthroughPhaseSensor(),
         ]
         
-        if cls.IL_PIPELINE_TYPE is not None:
+        if "il" in cls.PIPELINE_TYPE.lower().split('-'):
             sensors.append(
                 SubtaskAndActionExpertSensor(
                     action_space=(
@@ -309,7 +290,7 @@ class TwoPhaseTaskAwareRearrangeExperimentConfig(TaskAwareBaseExperimentConfig):
                 )
             )
         
-        if cls.IL_PIPELINE_TYPE is not None:
+        if "il" in cls.PIPELINE_TYPE.lower().split('-'):
             preprocessors.append(
                 cls.create_subtask_action_expert_preprocessor_builder(
                     in_uuids=[cls.EXPERT_SUBTASK_ACTION_UUID],
@@ -467,58 +448,153 @@ class TwoPhaseTaskAwareRearrangeExperimentConfig(TaskAwareBaseExperimentConfig):
         
     @classmethod
     def num_train_processes(cls) -> int:
-        if cls.IL_PIPELINE_TYPE is not None:
+        if cls.PIPELINE_TYPE is not None:
             return cls._use_label_to_get_training_params()["num_train_processes"]
         else:
             raise NotImplementedError
 
     @classmethod
     def _use_label_to_get_training_params(cls):
-        return il_training_params(
-            label=cls.IL_PIPELINE_TYPE.lower(), training_steps=cls.TRAINING_STEPS
+        return training_params(
+            label=cls.PIPELINE_TYPE.lower(), training_steps=cls.TRAINING_STEPS
         )
     
     @classmethod
     def _training_pipeline_info(cls, **kwargs) -> Dict[str, Any]:
         """Define how the model trains."""
-        if cls.IL_PIPELINE_TYPE is not None:
-            training_steps = cls.TRAINING_STEPS
-            params = cls._use_label_to_get_training_params()
-            bc_tf1_steps = params["bc_tf1_steps"]
-            dagger_steps = params["dagger_steps"]
-            
-            named_losses = dict(
-                imitation_loss=Imitation(),
+        assert cls.PIPELINE_TYPE is not None
+        training_steps = cls.TRAINING_STEPS
+        params = cls._use_label_to_get_training_params()
+        isIL = ('il' in cls.PIPELINE_TYPE.split('-'))
+        isRL = ('rl' in cls.PIPELINE_TYPE.split('-'))
+        assert (isIL or isRL)
+        bc_tf1_steps = params["bc_tf1_steps"] if isIL else 0
+        dagger_steps = params["dagger_steps"] if isIL else 0
+        
+        named_losses = {}
+        pipeline_stages: List[PipelineStage] = []
+        
+        if isIL:
+            assert cls.IL_LOSS_WEIGHT is not None
+            named_losses["imitation_loss"] = Imitation()
+        
+        if cls.WALKTHROUGH_TRAINING_PPO:
+            assert cls.WALKTHROUGH_PPO_LOSS_WEIGHT is not None
+            named_losses["walkthrough_ppo_loss"] = TaskAwareMaskedPPO(
+                mask_uuid="in_walkthrough_phase",
+                ppo_params=dict(
+                    clip_decay=LinearDecay(training_steps),
+                    **PPOConfig
+                ),
             )
+            
+        if isRL:
+            assert cls.RL_LOSS_WEIGHT is not None
             if cls.WALKTHROUGH_TRAINING_PPO:
-                named_losses["walkthrough_ppo_loss"] = TaskAwareMaskedPPO(
+                named_losses["unshuffle_ppo_loss"] = TaskAwareReverselyMaskedPPO(
                     mask_uuid="in_walkthrough_phase",
                     ppo_params=dict(
-                        clip_decay=LinearDecay(training_steps), **PPOConfig
+                        clip_decay=LinearDecay(
+                            training_steps - bc_tf1_steps - dagger_steps / 2
+                        ),
+                        **PPOConfig
                     ),
                 )
-            if cls.ONLINE_SUBTASK_PREDICTION:
-                named_losses["subtask_loss"] = SubtaskPredictionLoss(
-                    subtask_expert_uuid=cls.EXPERT_SUBTASK_UUID,
-                    subtask_logits_uuid="subtask_logits",
+            else:
+                named_losses["ppo_loss"] = PPO(
+                    clip_decay=LinearDecay(
+                        training_steps - bc_tf1_steps - dagger_steps / 2
+                    ),
+                    **PPOConfig,
                 )
+                
+        if cls.ONLINE_SUBTASK_PREDICTION:
+            assert cls.ONLINE_SUBTASK_LOSS_WEIGHT is not None
+            named_losses["subtask_loss"] = SubtaskPredictionLoss(
+                subtask_expert_uuid=cls.EXPERT_SUBTASK_UUID,
+                subtask_logits_uuid="subtask_logits",
+            )
+            
+        if isIL:
+            loss_names = ["imitation_loss"] + (
+                ["walkthrough_ppo_loss"] if cls.WALKTHROUGH_TRAINING_PPO else []
+            ) + (
+                ["subtask_loss"] if cls.ONLINE_SUBTASK_PREDICTION else []
+            )
+            loss_weights = [cls.IL_LOSS_WEIGHT] + (
+                [cls.WALKTHROUGH_PPO_LOSS_WEIGHT] if cls.WALKTHROUGH_TRAINING_PPO else []
+            )+ (
+                [cls.ONLINE_SUBTASK_LOSS_WEIGHT] if cls.ONLINE_SUBTASK_PREDICTION else []
+            )
+            max_stage_steps = training_steps if not isRL else (bc_tf1_steps + dagger_steps / 2)
+            cumm_steps_and_values = [
+                (bc_tf1_steps, 1.0), (bc_tf1_steps + dagger_steps, 0.0)
+            ] if not isRL else [
+                (bc_tf1_steps, 1.0), (bc_tf1_steps + dagger_steps / 2, 0.5)
+            ]
+            pipeline_stages.append(
+                PipelineStage(
+                    loss_names=loss_names,
+                    loss_weights=loss_weights,
+                    max_stage_steps=max_stage_steps,
+                    teacher_forcing=StepwiseLinearDecay(
+                        cumm_steps_and_values=cumm_steps_and_values
+                    ),
+                )
+            )
 
-            return dict(
-                named_losses=named_losses,
-                pipeline_stages=[
+            if isRL:
+                loss_names = ["imitation_loss"] + (
+                    ["unshuffle_ppo_loss", "walkthrough_ppo_loss"]
+                    if cls.WALKTHROUGH_TRAINING_PPO
+                    else ["ppo_loss"]
+                ) + (
+                    ["subtask_loss"] if cls.ONLINE_SUBTASK_PREDICTION else []
+                )
+                loss_weights = [cls.IL_LOSS_WEIGHT] + (
+                    [cls.RL_LOSS_WEIGHT , cls.WALKTHROUGH_PPO_LOSS_WEIGHT]
+                    if cls.WALKTHROUGH_TRAINING_PPO
+                    else [cls.RL_LOSS_WEIGHT]
+                ) + (
+                    [cls.ONLINE_SUBTASK_LOSS_WEIGHT] if cls.ONLINE_SUBTASK_PREDICTION else []
+                )
+                pipeline_stages.append(
                     PipelineStage(
-                        loss_names=list(named_losses.keys()),
-                        loss_weights=[1.0,] * len(named_losses),
-                        max_stage_steps=training_steps,
+                        loss_names=loss_names,
+                        loss_weights=loss_weights,
+                        max_stage_steps=(dagger_steps / 2),
                         teacher_forcing=StepwiseLinearDecay(
-                            cumm_steps_and_values=[
-                                (bc_tf1_steps, 1.0),
-                                (bc_tf1_steps + dagger_steps, 0.0),
-                            ]
+                            cumm_steps_and_values=[(0, 0.5), (dagger_steps / 2, 0.0)]
                         ),
                     )
-                ],
-                **params
+                )
+        
+        if isRL:
+            loss_names = (
+                ["unshuffle_ppo_loss", "walkthrough_ppo_loss"]
+                if cls.WALKTHROUGH_TRAINING_PPO
+                else ["ppo_loss"]
+            ) + (
+                ["subtask_loss"] if cls.ONLINE_SUBTASK_PREDICTION else []
             )
-        else:
-            raise NotImplementedError
+            loss_weights = (
+                [cls.RL_LOSS_WEIGHT , cls.WALKTHROUGH_PPO_LOSS_WEIGHT]
+                if cls.WALKTHROUGH_TRAINING_PPO
+                else [cls.RL_LOSS_WEIGHT]
+            ) + (
+                [cls.ONLINE_SUBTASK_LOSS_WEIGHT] if cls.ONLINE_SUBTASK_PREDICTION else []
+            )
+            max_stage_steps = (training_steps - (bc_tf1_steps + dagger_steps))
+            pipeline_stages.append(
+                PipelineStage(
+                    loss_names=loss_names,
+                    loss_weights=loss_weights,
+                    max_stage_steps=max_stage_steps,
+                )
+            )
+        
+        return dict(
+            named_losses=named_losses,
+            pipeline_stages=pipeline_stages,
+            **params
+        )
