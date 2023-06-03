@@ -2496,7 +2496,6 @@ class TwoPhaseSubtaskAwarePolicy(ActorCriticModel):
     
     def _reset_history(self, nsamplers: int):
         self.subtask_history = [[] for _ in range(nsamplers)]
-        self.num_steps = 0
         self.repeat_count = 0
 
     @property
@@ -2714,7 +2713,8 @@ class TwoPhaseSubtaskAwarePolicy(ActorCriticModel):
                     # append agent history with rollout history
                     assert (
                         len(self.subtask_history[sampler]) == nsteps + 1 == self.num_steps + 1
-                    )
+                    ), f"Subtask history [sampler {sampler}] : {len(self.subtask_history[sampler])} " \
+                        f"| nsteps + 1 : {nsteps + 1} | self.num_steps + 1 : {self.num_steps + 1}"
                     seq_masks = torch.zeros_like(subtask_history)
                     subtask_history = [
                         subtask_history,
