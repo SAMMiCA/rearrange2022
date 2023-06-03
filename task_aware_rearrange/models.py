@@ -2496,6 +2496,7 @@ class TwoPhaseSubtaskAwarePolicy(ActorCriticModel):
     
     def _reset_history(self, nsamplers: int):
         self.subtask_history = [[] for _ in range(nsamplers)]
+        self.num_steps = 0
         self.repeat_count = 0
 
     @property
