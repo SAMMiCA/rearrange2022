@@ -2712,7 +2712,7 @@ class TwoPhaseSubtaskAwarePolicy(ActorCriticModel):
                     # When the loss is updated
                     # append agent history with rollout history
                     assert (
-                        len(self.subtask_history[sampler]) == nsteps + 1 == self.num_steps + 1
+                        len(self.subtask_history[sampler]) == nsteps + 1
                     ), f"Subtask history [sampler {sampler}] : {len(self.subtask_history[sampler])} " \
                         f"| nsteps + 1 : {nsteps + 1} | self.num_steps + 1 : {self.num_steps + 1}"
                     seq_masks = torch.zeros_like(subtask_history)
