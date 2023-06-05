@@ -1,15 +1,15 @@
-from experiments.two_phase.two_phase_ta_base import TwoPhaseTaskAwareRearrangeExperimentConfig
+from experiments.two_phase.two_phase_ta_base_temp import TwoPhaseTaskAwareRearrangeExperimentConfig
 from allenact_plugins.ithor_plugin.ithor_sensors import RelativePositionChangeTHORSensor
 
 
 class TwoPhaseTestConfig(TwoPhaseTaskAwareRearrangeExperimentConfig):
-    PIPELINE_TYPE = "2proc-il-rl"
+    PIPELINE_TYPE = "1proc-il-il_rl"
     
     IL_LOSS_WEIGHT = 1.0
-    RL_LOSS_WEIGHT = 10.0
+    RL_LOSS_WEIGHT = 1.0
     
     WALKTHROUGH_TRAINING_PPO = True
-    WALKTHROUGH_PPO_LOSS_WEIGHT = 10.0
+    WALKTHROUGH_PPO_LOSS_WEIGHT = 1.0
     # HEADLESS = False
     RGB_NORMALIZATION = True
     EXPERT_VERBOSE = False
