@@ -486,25 +486,6 @@ class TwoPhaseTaskAwareRearrangeExperimentConfig(TaskAwareBaseExperimentConfig):
         named_losses = {}
         pipeline_stages: List[PipelineStage] = []
         
-        assert cls.IL_LOSS_WEIGHT is not None
-        named_losses["imitation_loss"] = Imitation()
-        named_losses["walkthorugh_imitation_loss"] = MaskedImitation(
-            mask_uuid="in_walkthrough_phase",
-        )
-        named_losses["unshuffle_imitation_loss"] = ReverselyMaskedImitation(
-            mask_uuid="in_walkthrough_phase",
-        )
-        pipeline_stages = [
-            PipelineStage(
-                loss_names=named_losses,
-                loss_weights=[1.0] * len(named_losses),
-                max_stage_steps=training_steps,
-                teacher_forcing=StepwiseLinearDecay(
-                    cumm_steps_and_values=[(bc_tf1_steps, 1.0), (bc_tf1_steps + dagger_steps, 0.0)],
-                ),
-            )
-        ]
-        
         if isUIL:
             assert cls.IL_LOSS_WEIGHT is not None
             named_losses["unshuffle_imitation_loss"] = ReverselyMaskedImitation(
