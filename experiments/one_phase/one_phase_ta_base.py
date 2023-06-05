@@ -199,7 +199,7 @@ class OnePhaseTaskAwareRearrangeBaseExperimentConfig(TaskAwareBaseExperimentConf
             ),
         ]
         
-        if "il" in cls.training_pipeline.lower().split('-')[1].split('_'):
+        if "il" in cls.PIPELINE_TYPE.lower().split('-')[1].split('_'):
             sensors.append(
                 OnePhaseSubtaskAndActionExpertSensor(
                     action_space=(
