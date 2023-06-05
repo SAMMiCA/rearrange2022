@@ -146,7 +146,7 @@ class MaskedImitation(Imitation):
         *args,
         **kwargs,
     ):
-        observations = cast(Dict[str, torch.Tensor], batch["obesrvations"])
+        observations = cast(Dict[str, torch.Tensor], batch["observations"])
         
         losses = OrderedDict()
         
@@ -208,7 +208,7 @@ class ReverselyMaskedImitation(Imitation):
         *args,
         **kwargs,
     ):
-        observations = cast(Dict[str, torch.Tensor], batch["obesrvations"])
+        observations = cast(Dict[str, torch.Tensor], batch["observations"])
         
         losses = OrderedDict()
         
