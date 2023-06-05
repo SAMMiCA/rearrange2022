@@ -485,7 +485,7 @@ class TwoPhaseTaskAwareRearrangeExperimentConfig(TaskAwareBaseExperimentConfig):
         
         named_losses = {}
         pipeline_stages: List[PipelineStage] = []
-        
+
         if isUIL:
             assert cls.IL_LOSS_WEIGHT is not None
             named_losses["unshuffle_imitation_loss"] = ReverselyMaskedImitation(
@@ -535,7 +535,7 @@ class TwoPhaseTaskAwareRearrangeExperimentConfig(TaskAwareBaseExperimentConfig):
         if (isUIL and isURL) or (isWIL and isWRL):
             if isIL:
                 loss_names = (
-                    ["walkthorugh_imitation_loss"] if isWIL else ["walkthrough_ppo_loss"]
+                    ["walkthrough_imitation_loss"] if isWIL else ["walkthrough_ppo_loss"]
                 ) + (
                     ["unshuffle_imitation_loss"] if isUIL else ["unshuffle_ppo_loss"]
                 ) + (
