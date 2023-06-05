@@ -551,8 +551,8 @@ class TwoPhaseTaskAwareRearrangeExperimentConfig(TaskAwareBaseExperimentConfig):
                 
                 pipeline_stages.append(
                     PipelineStage(
-                        loss_names=loss_names,
-                        loss_weights=loss_weights,
+                        loss_names=loss_names.copy(),
+                        loss_weights=loss_weights.copy(),
                         max_stage_steps=(
                             training_steps if not isRL
                             else (bc_tf1_steps + dagger_steps / 2)
@@ -566,12 +566,6 @@ class TwoPhaseTaskAwareRearrangeExperimentConfig(TaskAwareBaseExperimentConfig):
                         )
                     )
                 )
-                
-                num_pipeline_stages += 1
-                print(f"Pipeline stage #{num_pipeline_stages}")
-                print(f"Loss names: {loss_names}")
-                print(f"Loss weights: {loss_weights}")
-                print(f"Current pipeline stage: {pipeline_stages[-1]}")
                 
                 if isRL:
                     if isWRL and isWIL:
@@ -590,12 +584,6 @@ class TwoPhaseTaskAwareRearrangeExperimentConfig(TaskAwareBaseExperimentConfig):
                             ),
                         )
                     )
-                    
-                    num_pipeline_stages += 1
-                    print(f"Pipeline stage #{num_pipeline_stages}")
-                    print(f"Loss names: {loss_names}")
-                    print(f"Loss weights: {loss_weights}")
-                    print(f"Current pipeline stage: {pipeline_stages[-1]}")
 
             if isRL:
                 loss_names = (
@@ -619,11 +607,6 @@ class TwoPhaseTaskAwareRearrangeExperimentConfig(TaskAwareBaseExperimentConfig):
                         max_stage_steps=(training_steps - (bc_tf1_steps + dagger_steps)),
                     )
                 )
-                num_pipeline_stages += 1
-                print(f"Pipeline stage #{num_pipeline_stages}")
-                print(f"Loss names: {loss_names}")
-                print(f"Loss weights: {loss_weights}")
-                print(f"Current pipeline stage: {pipeline_stages[-1]}")
         else:
             loss_names = loss_names = (
                 ["walkthrough_ppo_loss"] if isWRL else ['walkthrough_imitation_loss']
@@ -652,11 +635,6 @@ class TwoPhaseTaskAwareRearrangeExperimentConfig(TaskAwareBaseExperimentConfig):
                     teacher_forcing=teacher_forcing,
                 )
             )
-            num_pipeline_stages += 1
-            print(f"Pipeline stage #{num_pipeline_stages}")
-            print(f"Loss names: {loss_names}")
-            print(f"Loss weights: {loss_weights}")
-            print(f"Current pipeline stage: {pipeline_stages[-1]}")
             
         return dict(
             named_losses=named_losses,
