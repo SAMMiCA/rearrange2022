@@ -3,7 +3,6 @@ import torch
 
 from allenact.base_abstractions.experiment_config import MachineParams
 from experiments.two_phase.two_phase_ta_base import TwoPhaseTaskAwareRearrangeExperimentConfig
-from allenact_plugins.ithor_plugin.ithor_sensors import RelativePositionChangeTHORSensor
 from allenact.base_abstractions.experiment_config import (
     MachineParams,
     split_processes_onto_devices,
@@ -14,16 +13,16 @@ class TwoPhaseDistributedExp001Config(TwoPhaseTaskAwareRearrangeExperimentConfig
     NUM_DISTRIBUTED_NODES: int = 4
     NUM_DEVICES: Union[int, Sequence[int]] = 1
     
-    PIPELINE_TYPE = "4proc-il"
+    PIPELINE_TYPE = "4proc_longtf-il-il_rl"      # Nproc(_longtf)-(unshuffle_training)-(walkthrough_trainig)
     
     CNN_PREPROCESSOR_TYPE_AND_PRETRAINING = ("RN50", "clip")
     
-    SAVE_INTERVAL = int(2e5)
+    SAVE_INTERVAL = int(1e6)
     IL_LOSS_WEIGHT = 1.0
     # RL_LOSS_WEIGHT = 10.0
     
     WALKTHROUGH_TRAINING_PPO = True
-    WALKTHROUGH_PPO_LOSS_WEIGHT = 10.0
+    WALKTHROUGH_PPO_LOSS_WEIGHT = 1.0
     # HEADLESS = False
     RGB_NORMALIZATION = True
     EXPERT_VERBOSE = False

@@ -25,7 +25,7 @@ from semseg.semseg_constants import CLASS_TO_COLOR_ORIGINAL, ORDERED_CLASS_TO_CO
 from task_aware_rearrange.subtasks import NUM_SUBTASKS
 from task_aware_rearrange.voxel_utils import GridParameters
 from task_aware_rearrange.expert import SubtaskAndActionExpertSensor
-from task_aware_rearrange.losses import TaskAwareMaskedPPO, TaskAwareReverselyMaskedPPO
+from task_aware_rearrange.losses import TaskAwareMaskedPPO, TaskAwareReverselyMaskedPPO, MaskedImitation, ReverselyMaskedImitation
 
 
 class StepwiseLinearDecay:
@@ -57,14 +57,17 @@ class StepwiseLinearDecay:
 
 def training_params(label: str, training_steps: int):
     """
-    label: Nproc(-il)(-longtf)(-rl)
+    label: Nproc(_longtf)(-il)(-rl)
     """
     use_lr_decay = False
 
     lr = 3e-4
-    num_train_processes = int(label.split('-')[0][:-4])
-    isIL = True if 'il' in label.split('-') else False
-    longtf = True if ('longtf' in label.split('-') and isIL) else False
+    num_train_processes = int(label.split('-')[0].split('_')[0][:-4])
+    isIL = True if (
+        'il' in label.split('-')[1].split('_') 
+        or 'il' in label.split('-')[2].split('_')
+    ) else False
+    longtf = True if ('longtf' in label.split('-')[0].split('_') and isIL) else False
     num_steps = 64
     dagger_steps = min(int(5e6), training_steps // 10) if longtf else min(int(1e6), training_steps // 10)
     bc_tf1_steps = min(int(5e5), training_steps // 10) if longtf else min(int(1e5), training_steps // 10)
@@ -92,9 +95,9 @@ class TwoPhaseTaskAwareRearrangeExperimentConfig(TaskAwareBaseExperimentConfig):
     SAVE_INTERVAL = int(5e5)
     CNN_PREPROCESSOR_TYPE_AND_PRETRAINING = ("RN50", "clip")
     
-    PIPELINE_TYPE: Optional[str] = None
-    IL_LOSS_WEIGHT: Optional[float] = None
-    RL_LOSS_WEIGHT: Optional[float] = None
+    PIPELINE_TYPE: Optional[str] = None     # Nproc(-longtf)_(unshuffle_training)_(walkthrough_trainig)
+    IL_LOSS_WEIGHT: Optional[float] = None  # IL loss for both unshuffle & walkthrough
+    RL_LOSS_WEIGHT: Optional[float] = None  # RL loss for only unshuffle
 
     WALKTHROUGH_TRAINING_PPO: bool = True
     WALKTHROUGH_PPO_LOSS_WEIGHT: Optional[float] = None
@@ -186,7 +189,7 @@ class TwoPhaseTaskAwareRearrangeExperimentConfig(TaskAwareBaseExperimentConfig):
             InWalkthroughPhaseSensor(),
         ]
         
-        if "il" in cls.PIPELINE_TYPE.lower().split('-'):
+        if "il" in cls.PIPELINE_TYPE.lower().split('-')[1].split('_'):
             sensors.append(
                 SubtaskAndActionExpertSensor(
                     action_space=(
@@ -194,7 +197,7 @@ class TwoPhaseTaskAwareRearrangeExperimentConfig(TaskAwareBaseExperimentConfig):
                         len(cls.actions()),
                     ),
                     uuid=cls.EXPERT_SUBTASK_ACTION_UUID,
-                    use_expert_agent_for_walkthrough=(not cls.WALKTHROUGH_TRAINING_PPO),
+                    use_expert_agent_for_walkthrough=('il' in cls.PIPELINE_TYPE.split('-')[2].split('_')),
                     verbose=cls.EXPERT_VERBOSE,
                 ),
             )
@@ -290,7 +293,7 @@ class TwoPhaseTaskAwareRearrangeExperimentConfig(TaskAwareBaseExperimentConfig):
                 )
             )
         
-        if "il" in cls.PIPELINE_TYPE.lower().split('-'):
+        if "il" in cls.PIPELINE_TYPE.lower().split('-')[1].split('_'):
             preprocessors.append(
                 cls.create_subtask_action_expert_preprocessor_builder(
                     in_uuids=[cls.EXPERT_SUBTASK_ACTION_UUID],
@@ -465,49 +468,81 @@ class TwoPhaseTaskAwareRearrangeExperimentConfig(TaskAwareBaseExperimentConfig):
         assert cls.PIPELINE_TYPE is not None
         training_steps = cls.TRAINING_STEPS
         params = cls._use_label_to_get_training_params()
-        isIL = ('il' in cls.PIPELINE_TYPE.split('-'))
-        isRL = ('rl' in cls.PIPELINE_TYPE.split('-'))
-        assert (isIL or isRL)
+        isUIL = ('il' in cls.PIPELINE_TYPE.split('-')[1].split('_'))
+        isURL = ('rl' in cls.PIPELINE_TYPE.split('-')[1].split('_'))
+        assert (isUIL or isURL), f"training method for unshuffle task is not assigned: {cls.PIPELINE_TYPE.split('-')[1]}"
+        isWIL = ('il' in cls.PIPELINE_TYPE.split('-')[2].split('_'))
+        isWRL = ('rl' in cls.PIPELINE_TYPE.split('-')[2].split('_'))
+        assert (isWIL or isWRL), f"training method for walkthrough task is not assigned: {cls.PIPELINE_TYPE.split('-')[2]}"
+        
+        assert not (isWIL and isURL) or (isWIL and isWRL and isUIL and isURL), \
+            f"Available methods: W[RL]|U[RL], W[RL]|U[IL], W[RL]|U[IL+RL], W[IL+RL]|U[IL+RL], W[IL+RL]|U[IL], W[IL]|U[IL]" \
+            f" W[{cls.PIPELINE_TYPE.split('-')[2].split('_')}] | U[{cls.PIPELINE_TYPE.split('-')[1].split('_')}]"
+        isIL = (isUIL or isWIL)
+        isRL = (isWRL or isURL)
         bc_tf1_steps = params["bc_tf1_steps"] if isIL else 0
         dagger_steps = params["dagger_steps"] if isIL else 0
         
         named_losses = {}
         pipeline_stages: List[PipelineStage] = []
         
-        if isIL:
-            assert cls.IL_LOSS_WEIGHT is not None
-            named_losses["imitation_loss"] = Imitation()
+        assert cls.IL_LOSS_WEIGHT is not None
+        named_losses["imitation_loss"] = Imitation()
+        named_losses["walkthorugh_imitation_loss"] = MaskedImitation(
+            mask_uuid="in_walkthrough_phase",
+        )
+        named_losses["unshuffle_imitation_loss"] = ReverselyMaskedImitation(
+            mask_uuid="in_walkthrough_phase",
+        )
+        pipeline_stages = [
+            PipelineStage(
+                loss_names=named_losses,
+                loss_weights=[1.0] * len(named_losses),
+                max_stage_steps=training_steps,
+                teacher_forcing=StepwiseLinearDecay(
+                    cumm_steps_and_values=[(bc_tf1_steps, 1.0), (bc_tf1_steps + dagger_steps, 0.0)],
+                ),
+            )
+        ]
         
-        if cls.WALKTHROUGH_TRAINING_PPO:
+        if isUIL:
+            assert cls.IL_LOSS_WEIGHT is not None
+            named_losses["unshuffle_imitation_loss"] = ReverselyMaskedImitation(
+                mask_uuid="in_walkthrough_phase",
+            )
+        
+        if isWIL:
+            assert cls.IL_LOSS_WEIGHT is not None
+            named_losses["walkthrough_imitation_loss"] = MaskedImitation(
+                mask_uuid="in_walkthrough_phase",
+            )
+        
+        if isURL:
+            assert cls.RL_LOSS_WEIGHT is not None
+            named_losses["unshuffle_ppo_loss"] = TaskAwareReverselyMaskedPPO(
+                mask_uuid="in_walkthrough_phase",
+                ppo_params=dict(
+                    clip_decay=LinearDecay(
+                        training_steps if not isUIL
+                        else training_steps - (bc_tf1_steps + dagger_steps / 2)
+                    ),
+                    **PPOConfig,
+                )
+            )
+            
+        if isWRL:
             assert cls.WALKTHROUGH_PPO_LOSS_WEIGHT is not None
             named_losses["walkthrough_ppo_loss"] = TaskAwareMaskedPPO(
                 mask_uuid="in_walkthrough_phase",
                 ppo_params=dict(
-                    clip_decay=LinearDecay(training_steps),
-                    **PPOConfig
-                ),
-            )
-            
-        if isRL:
-            assert cls.RL_LOSS_WEIGHT is not None
-            if cls.WALKTHROUGH_TRAINING_PPO:
-                named_losses["unshuffle_ppo_loss"] = TaskAwareReverselyMaskedPPO(
-                    mask_uuid="in_walkthrough_phase",
-                    ppo_params=dict(
-                        clip_decay=LinearDecay(
-                            training_steps - bc_tf1_steps - dagger_steps / 2
-                        ),
-                        **PPOConfig
-                    ),
-                )
-            else:
-                named_losses["ppo_loss"] = PPO(
                     clip_decay=LinearDecay(
-                        training_steps - bc_tf1_steps - dagger_steps / 2
+                        training_steps if not isWIL
+                        else training_steps - (bc_tf1_steps + dagger_steps / 2)
                     ),
                     **PPOConfig,
                 )
-                
+            )
+            
         if cls.ONLINE_SUBTASK_PREDICTION:
             assert cls.ONLINE_SUBTASK_LOSS_WEIGHT is not None
             named_losses["subtask_loss"] = SubtaskPredictionLoss(
@@ -515,46 +550,19 @@ class TwoPhaseTaskAwareRearrangeExperimentConfig(TaskAwareBaseExperimentConfig):
                 subtask_logits_uuid="subtask_logits",
             )
             
-        if isIL:
-            loss_names = ["imitation_loss"] + (
-                ["walkthrough_ppo_loss"] if cls.WALKTHROUGH_TRAINING_PPO else []
-            ) + (
-                ["subtask_loss"] if cls.ONLINE_SUBTASK_PREDICTION else []
-            )
-            loss_weights = [cls.IL_LOSS_WEIGHT] + (
-                [cls.WALKTHROUGH_PPO_LOSS_WEIGHT] if cls.WALKTHROUGH_TRAINING_PPO else []
-            )+ (
-                [cls.ONLINE_SUBTASK_LOSS_WEIGHT] if cls.ONLINE_SUBTASK_PREDICTION else []
-            )
-            max_stage_steps = training_steps if not isRL else (bc_tf1_steps + dagger_steps / 2)
-            cumm_steps_and_values = [
-                (bc_tf1_steps, 1.0), (bc_tf1_steps + dagger_steps, 0.0)
-            ] if not isRL else [
-                (bc_tf1_steps, 1.0), (bc_tf1_steps + dagger_steps / 2, 0.5)
-            ]
-            pipeline_stages.append(
-                PipelineStage(
-                    loss_names=loss_names,
-                    loss_weights=loss_weights,
-                    max_stage_steps=max_stage_steps,
-                    teacher_forcing=StepwiseLinearDecay(
-                        cumm_steps_and_values=cumm_steps_and_values
-                    ),
-                )
-            )
-
-            if isRL:
-                loss_names = ["imitation_loss"] + (
-                    ["unshuffle_ppo_loss", "walkthrough_ppo_loss"]
-                    if cls.WALKTHROUGH_TRAINING_PPO
-                    else ["ppo_loss"]
+        if (isUIL and isURL) or (isWIL and isWRL):
+            if isIL:
+                loss_names = (
+                    ["walkthorugh_imitation_loss"] if isWIL else ["walkthrough_ppo_loss"]
+                ) + (
+                    ["unshuffle_imitation_loss"] if isUIL else ["unshuffle_ppo_loss"]
                 ) + (
                     ["subtask_loss"] if cls.ONLINE_SUBTASK_PREDICTION else []
                 )
-                loss_weights = [cls.IL_LOSS_WEIGHT] + (
-                    [cls.RL_LOSS_WEIGHT , cls.WALKTHROUGH_PPO_LOSS_WEIGHT]
-                    if cls.WALKTHROUGH_TRAINING_PPO
-                    else [cls.RL_LOSS_WEIGHT]
+                loss_weights = (
+                    [cls.IL_LOSS_WEIGHT] if isWIL else [cls.WALKTHROUGH_PPO_LOSS_WEIGHT]
+                ) + (
+                    [cls.IL_LOSS_WEIGHT] if isUIL else [cls.RL_LOSS_WEIGHT]
                 ) + (
                     [cls.ONLINE_SUBTASK_LOSS_WEIGHT] if cls.ONLINE_SUBTASK_PREDICTION else []
                 )
@@ -562,37 +570,88 @@ class TwoPhaseTaskAwareRearrangeExperimentConfig(TaskAwareBaseExperimentConfig):
                     PipelineStage(
                         loss_names=loss_names,
                         loss_weights=loss_weights,
-                        max_stage_steps=(dagger_steps / 2),
-                        teacher_forcing=StepwiseLinearDecay(
-                            cumm_steps_and_values=[(0, 0.5), (dagger_steps / 2, 0.0)]
+                        max_stage_steps=(
+                            training_steps if not isRL
+                            else (bc_tf1_steps + dagger_steps / 2)
                         ),
+                        teacher_forcing=StepwiseLinearDecay(
+                            cumm_steps_and_values=[
+                                (bc_tf1_steps, 1.0), (bc_tf1_steps + dagger_steps, 0.0)
+                            ] if not isRL else [
+                                (bc_tf1_steps, 1.0), (bc_tf1_steps + dagger_steps / 2, 0.5)
+                            ]
+                        )
                     )
                 )
-        
-        if isRL:
-            loss_names = (
-                ["unshuffle_ppo_loss", "walkthrough_ppo_loss"]
-                if cls.WALKTHROUGH_TRAINING_PPO
-                else ["ppo_loss"]
+                if isRL:
+                    if isWRL and isWIL:
+                        loss_names.append('walkthrough_ppo_loss')
+                        loss_weights.append(cls.WALKTHROUGH_PPO_LOSS_WEIGHT)
+                    if isURL and isUIL:
+                        loss_names.append('unshuffle_ppo_loss')
+                        loss_weights.append(cls.RL_LOSS_WEIGHT)
+                    pipeline_stages.append(
+                        PipelineStage(
+                            loss_names=loss_names,
+                            loss_weights=loss_weights,
+                            max_stage_steps=(dagger_steps / 2),
+                            teacher_forcing=StepwiseLinearDecay(
+                                cumm_steps_and_values=[(0, 0.5), (dagger_steps / 2, 0.0)],
+                            ),
+                        )
+                    )
+
+            if isRL:
+                loss_names = (
+                    ["walkthrough_ppo_loss"] if isWRL else ['walkthrough_imitation_loss']
+                ) + (
+                    ["unshuffle_ppo_loss"] if isURL else ['unshuffle_imitation_loss']
+                ) + (
+                    ["subtask_loss"] if cls.ONLINE_SUBTASK_PREDICTION else []
+                )
+                loss_weights = (
+                    [cls.WALKTHROUGH_PPO_LOSS_WEIGHT] if isWRL else [cls.IL_LOSS_WEIGHT]
+                ) + (
+                    [cls.RL_LOSS_WEIGHT] if isURL else [cls.IL_LOSS_WEIGHT]
+                ) + (
+                    [cls.ONLINE_SUBTASK_LOSS_WEIGHT] if cls.ONLINE_SUBTASK_PREDICTION else []
+                )
+                pipeline_stages.append(
+                    PipelineStage(
+                        loss_names=loss_names,
+                        loss_weights=loss_weights,
+                        max_stage_steps=(training_steps - (bc_tf1_steps + dagger_steps)),
+                    )
+                )
+        else:
+            loss_names = loss_names = (
+                ["walkthrough_ppo_loss"] if isWRL else ['walkthrough_imitation_loss']
+            ) + (
+                ["unshuffle_ppo_loss"] if isURL else ['unshuffle_imitation_loss']
             ) + (
                 ["subtask_loss"] if cls.ONLINE_SUBTASK_PREDICTION else []
             )
             loss_weights = (
-                [cls.RL_LOSS_WEIGHT , cls.WALKTHROUGH_PPO_LOSS_WEIGHT]
-                if cls.WALKTHROUGH_TRAINING_PPO
-                else [cls.RL_LOSS_WEIGHT]
+                ["cls.WALKTHROUGH_PPO_LOSS_WEIGHT"] if isWRL else ["cls.IL_LOSS_WEIGHT"]
             ) + (
-                [cls.ONLINE_SUBTASK_LOSS_WEIGHT] if cls.ONLINE_SUBTASK_PREDICTION else []
+                ["cls.RL_LOSS_WEIGHT"] if isURL else ["cls.IL_LOSS_WEIGHT"]
+            ) + (
+                ["cls.ONLINE_SUBTASK_LOSS_WEIGHT"] if cls.ONLINE_SUBTASK_PREDICTION else []
             )
-            max_stage_steps = (training_steps - (bc_tf1_steps + dagger_steps))
+            teacher_forcing = StepwiseLinearDecay(
+                cumm_steps_and_values=[
+                    (bc_tf1_steps, 1.0), (bc_tf1_steps + dagger_steps, 0.0)
+                ]
+            ) if isIL else None
             pipeline_stages.append(
                 PipelineStage(
                     loss_names=loss_names,
                     loss_weights=loss_weights,
-                    max_stage_steps=max_stage_steps,
+                    max_stage_steps=training_steps,
+                    teacher_forcing=teacher_forcing,
                 )
             )
-        
+            
         return dict(
             named_losses=named_losses,
             pipeline_stages=pipeline_stages,

@@ -11,6 +11,7 @@ from allenact.algorithms.onpolicy_sync.policy import ObservationType
 from allenact.base_abstractions.distributions import CategoricalDistr, ConditionalDistr
 from allenact.base_abstractions.sensor import AbstractExpertSensor
 from allenact.base_abstractions.misc import ActorCriticOutput
+from allenact.algorithms.onpolicy_sync.losses.imitation import Imitation
 from rearrange.losses import MaskedPPO
 
 
@@ -126,4 +127,128 @@ class TaskAwareReverselyMaskedPPO(MaskedPPO):
         return (
             total_loss,
             losses_to_record,
+        )
+        
+        
+class MaskedImitation(Imitation):
+    
+    def __init__(
+        self, mask_uuid, *args, **kwargs
+    ):
+        super().__init__(*args, **kwargs)
+        self.mask_uuid = mask_uuid
+    
+    def loss(
+        self,
+        step_count: int,
+        batch: ObservationType,
+        actor_critic_output,
+        *args,
+        **kwargs,
+    ):
+        observations = cast(Dict[str, torch.Tensor], batch["obesrvations"])
+        
+        losses = OrderedDict()
+        
+        should_report_loss = False
+        
+        if "expert_action" in observations:
+            if self.expert_sensor is None or not self.expert_sensor.use_groups:
+                expert_actions_and_mask = observations["expert_action"]
+                mask = observations[self.mask_uuid].float()
+                
+                assert expert_actions_and_mask.shape[-1] == 2
+                expert_actions_and_mask_reshaped = expert_actions_and_mask.view(-1, 2)
+                
+                expert_actions = expert_actions_and_mask_reshaped[:, 0].view(
+                    *expert_actions_and_mask.shape[:-1], 1
+                )
+                expert_actions_masks = (
+                    expert_actions_and_mask_reshaped[:, 1]
+                    .float()
+                    .view(*expert_actions_and_mask.shape[:-1], 1)
+                )
+                mask = mask.view(*expert_actions_masks.shape)
+                
+                total_loss, expert_success = self.group_loss(
+                    cast(CategoricalDistr, actor_critic_output.distributions),
+                    expert_actions,
+                    expert_actions_masks * mask,
+                )
+                
+                should_report_loss = expert_success.item() != 0
+            
+            else:
+                raise NotImplementedError
+            
+        else:
+            raise NotImplementedError
+        
+        return (
+            total_loss,
+            {"expert_cross_entropy": total_loss.item(), **losses}
+            if should_report_loss
+            else {},
+        )
+        
+
+class ReverselyMaskedImitation(Imitation):
+    
+    def __init__(
+        self, mask_uuid, *args, **kwargs
+    ):
+        super().__init__(*args, **kwargs)
+        self.mask_uuid = mask_uuid
+    
+    def loss(
+        self,
+        step_count: int,
+        batch: ObservationType,
+        actor_critic_output,
+        *args,
+        **kwargs,
+    ):
+        observations = cast(Dict[str, torch.Tensor], batch["obesrvations"])
+        
+        losses = OrderedDict()
+        
+        should_report_loss = False
+        
+        if "expert_action" in observations:
+            if self.expert_sensor is None or not self.expert_sensor.use_groups:
+                expert_actions_and_mask = observations["expert_action"]
+                mask = (~observations[self.mask_uuid]).float()
+                
+                assert expert_actions_and_mask.shape[-1] == 2
+                expert_actions_and_mask_reshaped = expert_actions_and_mask.view(-1, 2)
+                
+                expert_actions = expert_actions_and_mask_reshaped[:, 0].view(
+                    *expert_actions_and_mask.shape[:-1], 1
+                )
+                expert_actions_masks = (
+                    expert_actions_and_mask_reshaped[:, 1]
+                    .float()
+                    .view(*expert_actions_and_mask.shape[:-1], 1)
+                )
+                mask = mask.view(*expert_actions_masks.shape)
+                
+                total_loss, expert_success = self.group_loss(
+                    cast(CategoricalDistr, actor_critic_output.distributions),
+                    expert_actions,
+                    expert_actions_masks * mask,
+                )
+                
+                should_report_loss = expert_success.item() != 0
+            
+            else:
+                raise NotImplementedError
+            
+        else:
+            raise NotImplementedError
+        
+        return (
+            total_loss,
+            {"expert_cross_entropy": total_loss.item(), **losses}
+            if should_report_loss
+            else {},
         )
