@@ -189,7 +189,10 @@ class TwoPhaseTaskAwareRearrangeExperimentConfig(TaskAwareBaseExperimentConfig):
             InWalkthroughPhaseSensor(),
         ]
         
-        if "il" in cls.PIPELINE_TYPE.lower().split('-')[1].split('_'):
+        if (
+            "il" in cls.PIPELINE_TYPE.lower().split('-')[1].split('_')
+            or cls.ONLINE_SUBTASK_PREDICTION
+        ):
             sensors.append(
                 SubtaskAndActionExpertSensor(
                     action_space=(
@@ -293,7 +296,10 @@ class TwoPhaseTaskAwareRearrangeExperimentConfig(TaskAwareBaseExperimentConfig):
                 )
             )
         
-        if "il" in cls.PIPELINE_TYPE.lower().split('-')[1].split('_'):
+        if (
+            "il" in cls.PIPELINE_TYPE.lower().split('-')[1].split('_')
+            or cls.ONLINE_SUBTASK_PREDICTION
+        ):
             preprocessors.append(
                 cls.create_subtask_action_expert_preprocessor_builder(
                     in_uuids=[cls.EXPERT_SUBTASK_ACTION_UUID],

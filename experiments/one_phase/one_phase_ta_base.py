@@ -199,7 +199,10 @@ class OnePhaseTaskAwareRearrangeBaseExperimentConfig(TaskAwareBaseExperimentConf
             ),
         ]
         
-        if "il" in cls.PIPELINE_TYPE.lower().split('-')[1].split('_'):
+        if (
+            "il" in cls.PIPELINE_TYPE.lower().split('-')[1].split('_')
+            or cls.ONLINE_SUBTASK_PREDICTION
+        ):
             sensors.append(
                 OnePhaseSubtaskAndActionExpertSensor(
                     action_space=(
@@ -327,7 +330,10 @@ class OnePhaseTaskAwareRearrangeBaseExperimentConfig(TaskAwareBaseExperimentConf
                 )
             )
         
-        if "il" in cls.PIPELINE_TYPE.lower().split('-')[1].split('_'):
+        if (
+            "il" in cls.PIPELINE_TYPE.lower().split('-')[1].split('_')
+            or cls.ONLINE_SUBTASK_PREDICTION
+        ):
             preprocessors.append(
                 cls.create_subtask_action_expert_preprocessor_builder(
                     in_uuids=[cls.EXPERT_SUBTASK_ACTION_UUID],
