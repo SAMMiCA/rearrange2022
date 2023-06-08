@@ -9,12 +9,12 @@ from allenact.base_abstractions.experiment_config import (
 )
 
 
-class OnePhaseDistrbutedExp002Config(OnePhaseTaskAwareRearrangeBaseExperimentConfig):
+class OnePhaseDistrbutedExp003Config(OnePhaseTaskAwareRearrangeBaseExperimentConfig):
     
     NUM_DISTRIBUTED_NODES: int = 3
     NUM_DEVICES: Union[int, Sequence] = 1
     
-    PIPELINE_TYPE = "4proc-il"
+    PIPELINE_TYPE = "8proc-il"
     
     CNN_PREPROCESSOR_TYPE_AND_PRETRAINING = ("RN50", "clip")
     
