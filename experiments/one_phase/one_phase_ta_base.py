@@ -88,6 +88,8 @@ class OnePhaseTaskAwareRearrangeBaseExperimentConfig(TaskAwareBaseExperimentConf
     TRAINING_STEPS = int(25e6)
     SAVE_INTERVAL = int(5e5)
     
+    SHORTER_EVALUATION: bool = False
+    
     CNN_PREPROCESSOR_TYPE_AND_PRETRAINING = ("RN50", "clip")
     PIPELINE_TYPE: Optional[str] = None     # Nproc(-longtf)_(training)
     IL_LOSS_WEIGHT: Optional[float] = None  # IL loss
@@ -466,6 +468,16 @@ class OnePhaseTaskAwareRearrangeBaseExperimentConfig(TaskAwareBaseExperimentConf
         if "mp_ctx" in kwargs:
             del kwargs["mp_ctx"]
         assert not cls.RANDOMIZE_START_ROTATION_DURING_TRAINING
+        if cls.SHORTER_EVALUATION:
+            assert stage == "combined", f"evaluation only for `combined` stage"
+            scene_to_allowed_rearrange_inds = {
+                scene: (
+                    (0,) if int(scene[9:]) % 100 < 21
+                    else (0, 1)
+                )
+                for scene in allowed_scenes
+            }
+        
         return RearrangeTaskSampler.from_fixed_dataset(
             run_walkthrough_phase=False,
             run_unshuffle_phase=True,
